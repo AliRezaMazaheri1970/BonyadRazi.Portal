@@ -1,0 +1,227 @@
+# نقشه راه امنیتی پرتال (نسخه اجرایی)
+# Project: BonyadRazavi.Portal
+# Version: 0.3
+# Date: 2026-02-17
+
+---
+
+## 1) هدف سند
+این سند برای اجرای امنیت به صورت مرحله‌ای نوشته شده است تا:
+1. فقط Gateway در معرض اینترنت باشد.
+2. صدا زدن APIها فقط با JWT معتبر انجام شود.
+3. دسترسی بین‌شرکتی (Cross-Tenant) رخ ندهد.
+4. لاگ امنیتی استاندارد و قابل گزارش ثبت شود.
+
+---
+
+## 2) وضعیت فعلی واقعی پروژه (Baseline واقعی کد)
+
+### Gateway
+- GET `/gateway/health`
+- Proxy route: `/api/auth/login` (Public + rate-limit: login)
+- Proxy route: `/api/auth/refresh` (Public + rate-limit: refresh)
+- Proxy route: `/api/auth/revoke` (Public + rate-limit: refresh)
+- Proxy route: `/api/auth/{**catch-all}` (JWT + rate-limit: api-standard)
+- Proxy route: `/api/users/{**catch-all}` (JWT + rate-limit: api-standard)
+- Proxy route: `/api/companies/{**catch-all}` (JWT + rate-limit: api-standard)
+- Proxy route: `/api/audit/{**catch-all}` (JWT + rate-limit: api-standard)
+- Proxy route: `/{**catch-all}` -> WebApp
+- API Allowlist فعال: `/api/auth`, `/api/users`, `/api/companies`, `/api/audit`
+- IP Allowlist فعال: `192.168.93.0/27` (در Development: loopback مجاز)
+
+### Auth API
+- POST `/api/auth/login` (Public)
+- POST `/api/auth/refresh` (Public)
+- POST `/api/auth/revoke` (Public)
+- GET `/api/auth/me` (Protected - `Portal.Access`)
+- GET `/api/users` (Protected - `Users.Read`)
+- GET `/api/users/{userId}` (Protected - `Users.Read`)
+- POST `/api/users` (Protected - `Users.Manage`)
+- PUT `/api/users/{userId}` (Protected - `Users.Manage`)
+- GET `/api/companies` (Protected - `Companies.Read`)
+- GET `/api/companies/{companyCode}` (Protected - `Companies.Read`)
+- PUT `/api/companies/{companyCode}` (Protected - `Companies.Manage`)
+- GET `/api/audit/actions` (Protected - `Audit.Read`)
+- GET `/health` (Protected - `System.Admin`)
+
+### Data Model (نسخه جاری)
+- جدول `Users` دارای ستون `CompanyCode` است (Tenant key اصلی).
+- نام شرکت از دیتابیس مرجع با connection string جداگانه خوانده می‌شود:
+  - `Select CompaniesCode, CompanyName From LaboratoryRASF.dbo.Companies_Base`
+- جدول `UserCompanies` از مدل جاری حذف شده و `Users.CompanyCode` تنها مرجع tenant است.
+
+### WebApp
+- `/login`
+- `/dashboard`
+
+---
+
+## 3) اصول امنیتی مصوب
+1. Default Deny برای API
+- هر مسیر API که صراحتا مجاز نشده باشد، رد شود.
+
+2. JWT First
+- تمام APIهای محافظت‌شده فقط با Bearer Token معتبر.
+
+3. Tenant Isolation
+- CompanyCode فقط از Claim خوانده شود.
+- CompanyCode در body/query برای عملیات tenant-scoped قابل اعتماد نباشد مگر کنترل‌شده.
+
+4. Secrets Hygiene
+- کلید JWT در appsettings نگهداری نشود؛ فقط Env/Secret Store.
+- ConnectionString تولیدی در repo ذخیره نشود.
+
+5. Auditability
+- هر عملیات مهم با ActionType + Metadata ثبت شود.
+
+---
+
+## 4) مدل هویت و دسترسی
+### Claims حداقلی JWT
+- `sub` = UserId
+- `company_code` = Tenant
+- `jti` = Token Id
+- `role`
+- `iss`, `aud`, `exp`, `nbf`
+
+### Roles پایه
+- `SuperAdmin`
+- `Admin`
+- `CompanyAdmin`
+- `Manager`
+- `User`
+- `Auditor`
+- `Operator`
+
+### Policies پایه
+- `Portal.Access`
+- `Users.Read`, `Users.Manage`
+- `Companies.Read`, `Companies.Manage`
+- `Audit.Read`
+- `System.Admin`
+
+---
+
+## 5) Security Matrix (نسخه جاری)
+
+| Method | Path | Exposure | Auth | Policy | TenantScoped | RateLimit | ActionType |
+|---|---|---|---|---|---|---|---|
+| GET | /gateway/health | Public محدود | None/IP allowlist | - | No | - | HealthCheck |
+| POST | /api/auth/login | Public | None | - | No | 5/min/IP | Login / LoginFailed |
+| POST | /api/auth/refresh | Public | None | - | No | 10/min/IP | TokenRefresh |
+| POST | /api/auth/revoke | Public | None | - | No | 10/min/IP | Logout / TokenRevoke |
+| GET | /api/auth/me | Protected | JWT | Portal.Access | Yes | 120/min/IP | ViewProfile |
+| GET | /api/users | Protected | JWT | Users.Read | Yes | 120/min/IP | ViewUsers |
+| GET | /api/users/{userId} | Protected | JWT | Users.Read | Yes | 120/min/IP | ViewUser |
+| POST | /api/users | Protected | JWT | Users.Manage | Yes | 120/min/IP | CreateUser |
+| PUT | /api/users/{userId} | Protected | JWT | Users.Manage | Yes | 120/min/IP | UpdateUser |
+| GET | /api/companies | Protected | JWT | Companies.Read | Yes | 120/min/IP | ViewCompany |
+| GET | /api/companies/{companyCode} | Protected | JWT | Companies.Read | Yes | 120/min/IP | ViewCompany |
+| PUT | /api/companies/{companyCode} | Protected | JWT | Companies.Manage | Yes | 120/min/IP | UpdateCompany |
+| GET | /api/audit/actions | Protected | JWT | Audit.Read | Yes | 120/min/IP | ViewAuditLogs |
+| GET | /health | Internal/Protected | JWT | System.Admin | No | 120/min/IP | ServiceHealth |
+
+نکته اجرایی مهم:
+- هر API جدید قبل از انتشار باید وارد این ماتریس شود.
+- خطاهای امنیتی `401/403` با `SecurityDenied` ثبت می‌شوند.
+
+---
+
+## 6) استاندارد لاگ امنیتی
+جدول لاگ فعلی با 4 ستون اصلی:
+- `UserId`
+- `ActionDate` (UTC)
+- `ActionType`
+- `Metadata` (JSON)
+
+نمونه Metadata:
+{
+  "ip": "1.2.3.4",
+  "userAgent": "...",
+  "path": "/api/auth/login",
+  "isSuccess": true,
+  "traceId": "..."
+}
+
+قانون:
+- هرگز Password/AccessToken/RefreshToken در Metadata ذخیره نشود.
+
+---
+
+## 7) وضعیت فازهای نقشه راه
+
+### فاز 1 - Hardening فوری
+وضعیت: انجام شد
+- JWT signing key از appsettings حذف و فقط از `JWT_SIGNING_KEY` خوانده می‌شود.
+- Authorize برای APIهای محافظت‌شده اجباری شده است.
+- Rate limit روی login/refresh/revoke در Gateway فعال است.
+- OpenAPI عمومی در Production غیرفعال است.
+
+### فاز 2 - مقاوم‌سازی احراز هویت
+وضعیت: انجام شد
+- Password hashing: PBKDF2
+- عمر AccessToken: 15 دقیقه
+- RefreshToken چرخشی
+- Lockout موقت بعد از تلاش ناموفق متعدد
+
+### فاز 3 - Tenant Enforcement
+وضعیت: انجام شد
+- کنترل tenant روی `Users` و `Companies` و `Audit` اعمال شده.
+- جلوگیری از cross-tenant برای read/manage پیاده‌سازی شده.
+
+### فاز 4 - Monitoring & Incident Readiness
+وضعیت: انجام شد
+- ActionType taxonomy تکمیل شده.
+- هشدار LoginFailed غیرعادی پیاده‌سازی شده.
+- Runbook رخداد امنیتی موجود است (`docs/SecurityIncidentRunbook.md`).
+
+---
+
+## 8) ActionTypeهای فعال نسخه جاری
+- `Login`
+- `LoginFailed`
+- `Logout`
+- `TokenRefresh`
+- `TokenRevoke`
+- `ViewProfile`
+- `ViewDashboard`
+- `ViewUsers`
+- `ViewUser`
+- `CreateUser`
+- `UpdateUser`
+- `ViewCompany`
+- `UpdateCompany`
+- `ViewAuditLogs`
+- `ServiceHealth`
+- `SecurityDenied`
+
+---
+
+## 9) Backlog فعلی
+- مورد باز در Backlog امنیتی فعلی ثبت نشده است.
+
+برای هر ماژول جدید:
+- تعریف Policy
+- Tenant enforcement
+- Audit ActionType
+- تست بدون توکن + تست cross-tenant
+
+---
+
+## 10) Production Hardening Checklist
+1. `JWT_SIGNING_KEY` در Environment/Secret Store تنظیم شود (حداقل 32 کاراکتر).
+2. `AUTH_DB_CONNECTION_STRING` و `LABORATORY_RASF_CONNECTION_STRING` در Environment/Secret Store تنظیم شوند.
+3. هیچ ConnectionString واقعی یا کلید امنیتی در appsettings commit نشود.
+4. فقط Gateway روی اینترنت expose باشد.
+5. تست‌های امنیتی CI شامل:
+   - unauthorized بدون JWT
+   - cross-tenant forbid
+6. workflow تست امنیتی Auth در CI (فایل `.github/workflows/security-auth-tests.yml`) فعال و سبز باشد.
+
+---
+
+## 11) تعریف Done نهایی امنیت
+1. همه APIهای غیر Public با JWT محافظت شوند.
+2. Cross-tenant data leak در تست‌ها صفر باشد.
+3. کلیدها و secrets خارج از کد و appsettings نگهداری شوند.
+4. لاگ امنیتی قابل گزارش و قابل جستجو باشد.

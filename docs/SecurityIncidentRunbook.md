@@ -1,118 +1,132 @@
-# Security Incident Runbook
-
-این سند راهنمای اجرایی واکنش به رخدادهای امنیتی در پروژه **BonyadRazi.Portal** است.
-
-## 1) تعریف رخداد
-رخداد امنیتی یعنی هر اتفاقی که یکی از موارد زیر را نشان دهد:
-- تلاش غیرعادی برای ورود (LoginFailed) از یک IP یا روی یک حساب
-- تلاش برای دسترسی cross-tenant (403 مکرر)
-- افزایش ناگهانی `401/403` روی مسیرهای حساس
-- نشانه‌های سوءاستفاده از Refresh/Revocation یا حملات brute force
-
-## 2) منابع داده و لاگ
-- Gateway logs
-- Api logs
-- Audit logs (ActionType + Metadata)
-
-### فیلدهای لازم در Metadata
-- ip
-- userAgent
-- path
-- traceId
-- isSuccess
-
-> قانون: هرگز Password/AccessToken/RefreshToken داخل Metadata ذخیره نشود.
-
-## 3) مراحل واکنش سریع (Triage)
-1. **تأیید رخداد**: تعداد رویدادهای `LoginFailed`/`SecurityDenied` را در بازه زمانی بررسی کنید.
-2. **شناسایی Scope**:
-   - حساب/کاربر هدف
-   - IP یا رنج IP
-   - endpointهای تحت حمله
-3. **مهار موقت (Containment)**:
-   - مسدودسازی IP/Range در لایه شبکه یا allowlist
-   - اگر لازم است RateLimit را سخت‌تر کنید (login/refresh)
-   - در صورت احتمال compromise، کاربر را lock کنید یا رمز را reset کنید
-4. **جمع‌آوری شواهد**:
-   - export لاگ‌ها با timestamp UTC
-   - traceIdهای مرتبط
 
 ---
 
-## Incident Playbook: Spike in 401/403 (SecurityDenied)
+## 2) docs/SecurityIncidentRunbook.md
 
-### هدف
-تشخیص سریع علت افزایش 401/403 و اقدام عملی بدون downtime.
+```md
+# Security Incident Runbook — BonyadRazi.Portal
 
-### ابزار اصلی (Admin-only)
-Endpoint گزارش denied:
-- `GET /api/audit/denied`
-- فیلترها: `fromUtc`, `toUtc`, `statusCode`, `companyCode`, `page`, `pageSize`
-
-### گام‌های عملی (Step-by-step)
-
-#### Step 1 — بازه زمانی را کوچک کن
-مثلاً ۱۵ دقیقه اخیر:
-- `fromUtc = nowUtc - 15m`
-- `toUtc = nowUtc`
-
-نمونه:
-- `/api/audit/denied?page=1&pageSize=50&fromUtc=2026-02-25T12:00:00Z&toUtc=2026-02-25T12:15:00Z`
-
-#### Step 2 — تفکیک 401 و 403
-- فقط 401:
-  - `/api/audit/denied?page=1&pageSize=50&statusCode=401&fromUtc=...&toUtc=...`
-- فقط 403:
-  - `/api/audit/denied?page=1&pageSize=50&statusCode=403&fromUtc=...&toUtc=...`
-
-**تعبیر سریع:**
-- 401 بالا → توکن نامعتبر/منقضی، misconfig issuer/audience، یا اسکن مسیرها
-- 403 بالا → cross-tenant، policy/role mismatch، یا تلاش برای admin-only
-
-#### Step 3 — مسیرهای پرتکرار را پیدا کن
-در خروجی report، `path` و `method` را مرتب کن (ذهنی/دستی) و ببین کدام endpointها هدف هستند.
-- اگر مسیرهای عجیب زیاد است → احتمال اسکن/Probe
-- اگر مسیرهای tenant-scoped زیاد است (companies/users) → احتمال cross-tenant یا client misconfig
-
-#### Step 4 — منبع را بررسی کن
-- `remoteIp` پرتکرار؟
-- `userAgent` ثابت/غیرعادی؟
-- `traceId` برای نمونه‌برداری و ردیابی دقیق در لاگ‌های Api/Gateway
-
-#### Step 5 — اقدام مهار (Containment)
-- اگر یک IP/Range مشخص عامل deny هاست:
-  - مسدودسازی در لایه شبکه / Firewall / IP allowlist
-- اگر 401 ناشی از misconfig است:
-  - بررسی `Jwt:Issuer`, `Jwt:Audience`, `JWT_SIGNING_KEY` در محیط Production
-- اگر 403 ناشی از cross-tenant است:
-  - بررسی claim `company_code` در JWT و جریان صدور توکن
-  - بررسی اینکه route companyCode صرفاً با claim مقایسه می‌شود (Tenant Guard)
-
-### Root Cause Checklist (چک‌لیست علت ریشه‌ای)
-**401**
-- issuer/audience mismatch
-- signing key mismatch
-- clock skew / exp / nbf
-- استفاده از توکن قدیمی در client
-
-**403**
-- role/policy ناقص
-- تلاش cross-tenant
-- دسترسی admin-only توسط user عادی
+این Runbook برای پاسخ عملیاتی به رخدادهای امنیتی نوشته شده است:
+- Spike در 401/403 (به‌خصوص `SecurityDenied`)
+- Spike در `LoginFailed`
+- نشانه‌های Cross-Tenant attempt
+- خطاهای ناخواسته 500 در مسیرهای امنیتی
 
 ---
 
-## 4) اقدام اصلاحی (Eradication)
-- بررسی ضعف‌های مسیرهای درگیر (policy, tenant guard, allowlist)
-- بررسی سوءپیکربندی (JWT issuer/audience، clock skew، signing key)
-- اطمینان از عدم leak شدن secretها (ENV/Secret Store)
+## 0) تعاریف و سیگنال‌ها
+### سیگنال‌های اصلی
+- **SecurityDenied**: هر 401/403 که توسط Middleware ثبت می‌شود.
+- **LoginFailed**: تلاش ناموفق ورود (به‌خصوص در حجم بالا).
+- **TokenRefresh / TokenRevoke**: نوسان غیرعادی می‌تواند نشانه سوء‌استفاده باشد.
 
-## 5) بازیابی (Recovery)
-- بازگرداندن دسترسی‌های ضروری پس از اطمینان
-- مانیتورینگ شدیدتر برای 24-72 ساعت
+### شدت رخداد (Severity)
+- **SEV1**: افزایش شدید `LoginFailed` + IP های متنوع / حمله گسترده، یا شواهد دسترسی غیرمجاز موفق
+- **SEV2**: افزایش شدید `SecurityDenied` (401/403) یا Cross-Tenant attempt بدون موفقیت
+- **SEV3**: خطاهای موردی/گزارش کاربر بدون الگوی حمله
 
-## 6) درس‌آموخته‌ها (Postmortem)
-- ثبت timeline رخداد
-- علت ریشه‌ای (Root Cause)
-- اقدام‌های پیشگیرانه (tests، rules، monitoring)
-- آپدیت کردن Security Matrix در صورت تغییر API
+---
+
+## 1) چک فوری (۱۵ دقیقه اول)
+1) تایم‌اسپن بررسی را مشخص کنید (مثلاً ۳۰ دقیقه اخیر UTC)
+2) از Endpoint گزارش استفاده کنید:
+   - `GET /api/audit/denied?fromUtc=...&toUtc=...&statusCode=401|403&companyCode=...`
+3) نرخ‌ها را جدا کنید:
+   - 401 (No token / Expired / Invalid)
+   - 403 (Policy deny / Cross-tenant / Role deny)
+4) Top offender ها:
+   - `remoteIp`
+   - `userAgent`
+   - `path`
+   - `reason`
+
+---
+
+## 2) تشخیص نوع رخداد
+
+### A) Spike در 401
+علت‌های رایج:
+- کلاینت بدون توکن به endpoint های Protected
+- AccessToken منقضی شده و Refresh درست کار نمی‌کند
+- Gateway/YARP اشتباه route می‌دهد یا header Authorization را نمی‌فرستد
+- Issuer/Audience mismatch بعد از تغییر config
+
+اقدامات:
+1) بررسی کنید آیا مسیرهای Public درست هستند (login/refresh/revoke)
+2) نمونه یک درخواست 401 را با TraceId پیدا کنید و log سرویس API را match کنید
+3) صحت ENV ها:
+   - `JWT_SIGNING_KEY` (حداقل 32 کاراکتر)
+   - `Jwt:Issuer = BonyadRazi.Auth`
+   - `Jwt:Audience = BonyadRazi.Portal`
+4) اگر پشت Gateway هستید:
+   - بررسی کنید Authorization header حذف/تغییر نشده باشد
+   - ForwardedHeaders برای ثبت IP واقعی فعال باشد
+
+### B) Spike در 403
+علت‌های رایج:
+- Policy/Role misconfiguration
+- tenant mismatch (Cross-Tenant attempt یا bug در claim)
+- endpoint جدید بدون ثبت policy درست
+
+اقدامات:
+1) در گزارش denied فیلتر کنید `statusCode=403`
+2) `reason` را بررسی کنید:
+   - `CrossTenant` → تلاش دسترسی بین‌شرکتی (یا bug)
+   - `PolicyDenied`/`RoleDenied` → تنظیمات Policy/Role
+3) روی endpoint موردنظر تست کنید:
+   - same-tenant → باید 200
+   - cross-tenant → باید 403
+4) اگر 403 برای same-tenant رخ می‌دهد:
+   - بررسی claim `company_code`
+   - بررسی RoleClaimType و NameClaimType
+   - بررسی اینکه `FallbackPolicy` فعال است و endpoint اجازه‌نامه درست دارد
+
+### C) Spike در LoginFailed
+علت‌های رایج:
+- brute force
+- credential stuffing
+- مشکل UX (کاربران واقعی رمز را اشتباه می‌زنند) ولی با IP ثابت
+
+اقدامات:
+1) Top IP و UserAgent را استخراج کنید
+2) اگر IP های زیاد + الگوی ثابت userAgent:
+   - SEV1/SEV2 در نظر بگیرید
+3) Rate limit های gateway را بررسی کنید (login/refresh/revoke)
+4) Lockout policy را بررسی کنید (اگر فعال است، نسبت false positive را بسنجید)
+
+---
+
+## 3) اقدامات مهار (Containment)
+- در Gateway:
+  - افزایش سخت‌گیری Rate Limit برای login (موقت)
+  - مسدودسازی IP/ASN مشکوک (اگر سیاست سازمان اجازه می‌دهد)
+- در API:
+  - بررسی اینکه secrets در log/audit ثبت نشده باشند
+  - در صورت مشکوک بودن حساب‌ها:
+    - revoke session / refresh tokens (طبق مکانیزم جاری)
+
+---
+
+## 4) بررسی ریشه‌ای (RCA) — چک‌لیست
+- آیا تغییر اخیر در:
+  - Issuer/Audience
+  - `JWT_SIGNING_KEY`
+  - gateway routes
+  - policy mapping
+  - tenant enforcement
+  باعث رخداد شده؟
+- آیا endpoint جدید بدون ثبت در SecurityMatrix اضافه شده؟
+- آیا CI سبز بوده و PR Gate رعایت شده؟
+
+---
+
+## 5) خروجی استاندارد حادثه (Incident Report Template)
+- Incident ID:
+- Severity:
+- Timeline (UTC):
+- Impact:
+- Indicators (IPs, paths, traceIds):
+- Containment actions:
+- Root Cause:
+- Fix applied (PR links):
+- Preventive actions (tests/docs):
