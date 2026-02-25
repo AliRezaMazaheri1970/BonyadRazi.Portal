@@ -20,7 +20,6 @@
 | GET | /health | Internal/Protected | JWT | System.Admin | No | 120/min/IP | ServiceHealth |
 
 ## قواعد اجرایی
-
 - **Default Deny**: هر مسیری که در Gateway allowlist نشده باشد رد می‌شود.
 - **JWT First**: APIهای protected بدون Bearer token معتبر نباید پاسخ دهند.
 - **Tenant Isolation**: برای مسیرهای tenant-scoped، `company_code` فقط از claim خوانده می‌شود.
