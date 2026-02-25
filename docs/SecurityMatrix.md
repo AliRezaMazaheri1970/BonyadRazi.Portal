@@ -16,7 +16,7 @@
 | GET | /api/companies | Protected | JWT | Companies.Read | Yes | 120/min/IP | ViewCompany |
 | GET | /api/companies/{companyCode} | Protected | JWT | Companies.Read | Yes | 120/min/IP | ViewCompany |
 | PUT | /api/companies/{companyCode} | Protected | JWT | Companies.Manage | Yes | 120/min/IP | UpdateCompany |
-| GET | /api/audit/actions | Protected | JWT | Audit.Read | Yes | 120/min/IP | ViewAuditLogs |
+| GET | /api/audit/denied | Protected | JWT | Audit.Read | Yes | 120/min/IP | ViewAuditLogs |
 | GET | /health | Internal/Protected | JWT | System.Admin | No | 120/min/IP | ServiceHealth |
 
 ## قواعد اجرایی
