@@ -1,36 +1,106 @@
 # BonyadRazi.Portal
 
-پرتال بنیاد رازی — معماری Microservice با Gateway (YARP) + API + لایه‌های Domain/Application/Infrastructure/Shared  
-تمرکز اصلی: **امنیت (JWT/Policy/Tenant Isolation)**، **Audit در DB** و **CI Security Gate**
+پرتال سازمانی با معماری Gateway + API Services + WebApp، با تمرکز روی:
+- امنیت استاندارد (JWT/Policy/Default Deny)
+- Tenant Isolation
+- Audit واقعی برای 401/403 و عملیات‌های مهم
+- CI/PR Gate روی GitHub
 
 ---
 
-## ساختار پروژه
-
-- `Api/` سرویس API (Auth/JWT + Controllers + Policies)
-- `Gateway/` Gateway مبتنی بر YARP (allowlist, rate limit, health)
-- `Domain/` مدل‌های دامنه
-- `Application/` منطق کاربردی و Abstractions
-- `Infrastructure/` Persistence, Audit, EF Core
-- `Shared/` Contracts/Shared primitives
-- `Tests/BonyadRazi.Portal.SecurityTests/` تست‌های امنیتی (CI Gate)
+## معماری کلی
+- **Gateway**: تنها نقطه در معرض اینترنت (YARP + rate-limit + allowlist)
+- **Auth/API Service**: احراز هویت JWT + policy authorization + tenant enforcement
+- **WebApp**: کلاینت پرتال
 
 ---
 
-## پیش‌نیازها
+## Quick Start (Local)
+### پیش‌نیاز
+- .NET SDK (ترجیحاً نسخه‌ای که پروژه با آن تنظیم شده)
+- دسترسی به DB ها (در صورت نیاز) یا اجرای تست‌ها با InMemory در محیط Testing
 
-- .NET SDK (پروژه روی `net10.0` تنظیم شده است)
-- (در صورت اجرای واقعی DB) SQL Server برای دیتابیس Audit
+### متغیرهای محیطی ضروری
+حداقل:
+- `JWT_SIGNING_KEY` (حداقل 32 کاراکتر)
+
+در Production/Stage معمولاً:
+- `AUTH_DB_CONNECTION_STRING`
+- `LABORATORY_RASF_CONNECTION_STRING`
+
+> نکته امنیتی: هیچ کلید/ConnectionString واقعی نباید داخل repo یا appsettings commit شود.
 
 ---
 
-## اجرای لوکال
+## امنیت (خلاصه اجرایی)
+### JWT Validation
+- ValidateIssuer / ValidateAudience / ValidateLifetime = true
+- Issuer: `BonyadRazi.Auth`
+- Audience: `BonyadRazi.Portal`
+- ClockSkew: 30s
+- MapInboundClaims = false
+- RoleClaimType = `ClaimTypes.Role`
+- NameClaimType = `sub`
 
-### متغیرهای محیطی ضروری (JWT)
+### Default Deny
+- `FallbackPolicy = RequireAuthenticatedUser()`
 
-نمونه برای PowerShell:
+### Tenant Isolation
+- Tenant فقط از claim `company_code`
+- نمونه: `GET /api/companies/{companyCode:guid}`
+  - claim نبود یا mismatch → 403
+  - match → 200
 
-```powershell
-$env:JWT_SIGNING_KEY="YOUR_32+_CHAR_SECRET_KEY________________"
-$env:Jwt__Issuer="BonyadRazi.Auth"
-$env:Jwt__Audience="BonyadRazi.Portal"
+### Audit 401/403
+- Middleware برای 401/403 رکورد Audit با ActionType=`SecurityDenied` ثبت می‌کند.
+- گزارش Admin-only:
+  - `GET /api/audit/denied` با فیلترهای `fromUtc/toUtc/statusCode/companyCode/page/pageSize`
+
+---
+
+## Documentation
+- `docs/SecurityMatrix.md` — مرجع اجرایی Endpoint ها، Policy ها، TenantScope و ActionType
+- `docs/SecurityIncidentRunbook.md` — دستورالعمل واکنش به رخدادهای امنیتی
+
+---
+
+## CI / PR Gate
+### GitHub Actions
+Workflow امنیتی:
+- `.github/workflows/security-auth-tests.yml`
+
+این workflow حداقل این‌ها را بررسی می‌کند:
+- build + test در Release
+- اجرای SecurityTests
+
+### Branch Protection / Ruleset
+- Ruleset فعال است و Status check زیر برای merge به `master` اجباری است:
+  - `security-auth-test`
+
+---
+
+## Testing
+### SecurityTests (فعلی)
+- بدون توکن → 401
+- cross-tenant → 403
+- same-tenant → 200
+- audit denied: بدون توکن 401، غیرادمین 403، ادمین 200
+
+### نکته Testing DB
+در CI/Testing از EFCore InMemory استفاده می‌شود تا تست‌ها به DB واقعی وابسته نباشند.
+
+---
+
+## مسیرهای کلیدی
+- Gateway routes: `/api/auth/*`, `/api/users/*`, `/api/companies/*`, `/api/audit/*`
+- WebApp routes: `/login`, `/dashboard`
+
+---
+
+## Contributing
+قبل از افزودن هر Endpoint جدید:
+1) ثبت در `docs/SecurityMatrix.md`
+2) tenant enforcement (در صورت نیاز)
+3) audit ActionType
+4) تست‌های 401/403 و مسیر مجاز
+5) سبز شدن CI قبل از PR merge
