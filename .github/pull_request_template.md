@@ -13,31 +13,30 @@
 ---
 
 ## چک‌لیست امنیتی (الزامی)
+
 ### Default Deny / Exposure
 - [ ] Endpoint جدید اضافه شده؟ اگر بله در `docs/SecurityMatrix.md` ثبت شد.
 - [ ] مسیرهای جدید در Gateway allowlist / routes تعریف شده‌اند (Default Deny حفظ شده).
-- [ ] هیچ endpoint غیرضروری public نشده (خصوصاً health/openapi).
+- [ ] مسیرهای health/openapi/public ناخواسته عمومی نشده‌اند.
 
-### JWT / Claims / Policy
-- [ ] endpointهای protected فقط با JWT معتبر کار می‌کنند.
-- [ ] issuer/audience مطابق config پروژه است.
+### JWT / Policy
+- [ ] مسیرهای protected فقط با JWT معتبر پاسخ می‌دهند.
 - [ ] Policy مناسب روی endpoint اعمال شده است.
-- [ ] Role/Policy ادمین (Admin/SuperAdmin) برای مسیرهای admin-only درست enforce شده.
+- [ ] اگر endpoint admin-only است، دسترسی غیرادمین 403 می‌دهد.
 
-### Tenant Isolation (Cross-Tenant)
-- [ ] برای مسیرهای tenant-scoped: `company_code` فقط از Claim خوانده می‌شود.
-- [ ] company_code از route/query/body به عنوان مبنا استفاده نشده مگر کنترل‌شده.
-- [ ] سناریوی cross-tenant تست شده و 403 می‌دهد.
-- [ ] سناریوی same-tenant تست شده و 200 می‌دهد.
+### Tenant Isolation (اگر tenant-scoped است)
+- [ ] `company_code` فقط از Claim خوانده می‌شود (نه از route/query/body به عنوان مبنا).
+- [ ] cross-tenant → 403
+- [ ] same-tenant → 200
 
 ### Audit / Logging
 - [ ] برای 401/403، `SecurityDenied` ثبت می‌شود.
-- [ ] Metadata شامل `statusCode`, `path`, `method`, `ip`, `userAgent`, `traceId` است.
-- [ ] هیچ Password/Token/Secret داخل Metadata ذخیره نشده است.
+- [ ] metadata شامل `statusCode`, `path`, `method`, `ip`, `userAgent`, `traceId` است.
+- [ ] هرگز Password/AccessToken/RefreshToken در metadata ذخیره نشده است.
 
 ### Secrets Hygiene
-- [ ] Secret جدید نیاز شد؟ فقط در ENV/SecretStore/GitHub Secrets اضافه شد (نه داخل repo).
-- [ ] ConnectionString واقعی یا کلید امنیتی داخل appsettings commit نشده است.
+- [ ] هیچ Secret/ConnectionString واقعی در repo/appsettings commit نشده است.
+- [ ] Secret جدید؟ فقط ENV/SecretStore/GitHub Secrets.
 
 ---
 
@@ -51,12 +50,6 @@
 
 ---
 
-## تغییرات در مستندات
-- [ ] `docs/SecurityMatrix.md` به‌روزرسانی شد (اگر endpoint تغییر کرده)
-- [ ] در صورت تغییر رفتار امنیتی، `docs/SecurityIncidentRunbook.md` هم sync شد
-
----
-
-## توضیحات تکمیلی / ریسک‌ها
+## ریسک‌ها / Rollback
 - ریسک‌های احتمالی:
-- Plan Rollback:
+- Plan rollback:
