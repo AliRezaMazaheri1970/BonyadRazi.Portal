@@ -7,16 +7,13 @@ using Xunit;
 
 namespace BonyadRazi.Portal.SecurityTests;
 
-public sealed class AuditDeniedSecurityTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class AuditDeniedSecurityTests : IClassFixture<ApiFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly ApiFactory _factory;
 
-    public AuditDeniedSecurityTests(WebApplicationFactory<Program> factory)
+    public AuditDeniedSecurityTests(ApiFactory factory)
     {
-        _factory = factory.WithWebHostBuilder(builder =>
-        {
-            builder.UseEnvironment("Testing");
-        });
+        _factory = factory;
     }
 
     [Fact]
