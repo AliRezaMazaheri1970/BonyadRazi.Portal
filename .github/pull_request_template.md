@@ -35,7 +35,7 @@
 - [ ] هرگز Password/AccessToken/RefreshToken در metadata ذخیره نشده است.
 
 ### Secrets Hygiene
-- [ ] هیچ Secret/ConnectionString واقعی در repo/appsettings commit نشده است.
+- [ ] هیچ Secret/ConnectionString واقعی داخل repo/appsettings commit نشده است.
 - [ ] Secret جدید؟ فقط ENV/SecretStore/GitHub Secrets.
 
 ---
@@ -47,6 +47,12 @@
   - [ ] cross-tenant → 403
   - [ ] same-tenant → 200
   - [ ] admin-only: بدون توکن 401 / غیرادمین 403 / ادمین 200
+
+---
+
+## Docs / مستندات
+- [ ] اگر endpoint/policy تغییر کرده، `docs/SecurityMatrix.md` آپدیت شده است.
+- [ ] اگر رفتار Incident/Logging تغییر کرده، `docs/SecurityIncidentRunbook.md` آپدیت شده است.
 
 ---
 

@@ -37,3 +37,7 @@
 - **401**: بدون توکن → Unauthorized
 - **403**: توکن معتبر با Role غیر Admin/SuperAdmin → Forbidden
 - **200**: توکن معتبر با Role=Admin/SuperAdmin → Ok
+
+## Incident Response
+برای واکنش عملیاتی به رخدادهای امنیتی (افزایش 401/403، brute-force، cross-tenant)، به این سند مراجعه کنید:
+- `docs/SecurityIncidentRunbook.md`
