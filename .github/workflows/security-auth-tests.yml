@@ -1,0 +1,29 @@
+name: security-auth-tests
+
+on:
+  pull_request:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      # Must be >= 32 chars (Gateway/Api requirement)
+      JWT_SIGNING_KEY: "TEST_ONLY_SIGNING_KEY_CHANGE_ME_1234567890"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Test SecurityTests
+        run: dotnet test Tests/BonyadRazi.Portal.SecurityTests/BonyadRazi.Portal.SecurityTests.csproj -c Release --logger "trx;LogFileName=security-auth-tests.trx"
