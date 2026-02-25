@@ -24,3 +24,16 @@
 - **JWT First**: APIهای protected بدون Bearer token معتبر نباید پاسخ دهند.
 - **Tenant Isolation**: برای مسیرهای tenant-scoped، `company_code` فقط از claim خوانده می‌شود.
 - **Audit**: ثبت `SecurityDenied` برای `401/403` و عدم ذخیره‌ی Token/Password در metadata.
+
+## Test Coverage (CI / SecurityTests)
+این بخش نشان می‌دهد چه سناریوهایی به صورت خودکار در CI تست می‌شوند.
+
+### Companies (Tenant Isolation)
+- **401**: بدون توکن → Unauthorized
+- **403**: توکن معتبر + companyCode در route ≠ claim.company_code → Forbidden (cross-tenant)
+- **200**: توکن معتبر + companyCode در route = claim.company_code → Ok (same-tenant)
+
+### Audit Denied Report (Admin-only)
+- **401**: بدون توکن → Unauthorized
+- **403**: توکن معتبر با Role غیر Admin/SuperAdmin → Forbidden
+- **200**: توکن معتبر با Role=Admin/SuperAdmin → Ok
