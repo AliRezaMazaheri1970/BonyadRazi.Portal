@@ -12,9 +12,6 @@ public sealed class UserActionLog
 
     public string ActionType { get; set; } = default!;
 
-    /// <summary>
-    /// JSON-serialized metadata (do NOT store secrets/tokens/passwords).
-    /// </summary>
     public string MetadataJson { get; set; } = "{}";
 
     public string? TraceId { get; set; }
