@@ -59,18 +59,24 @@ public static class GatewaySecurityHelper
     /// </summary>
     public static bool IsIpAllowed(HttpContext ctx, IConfiguration config, IHostEnvironment env)
     {
+        // ✅ configurable bypass for Testing
+        var bypassInTesting = config.GetValue("Security:BypassIpAllowlistInTesting", true);
+        if (env.IsEnvironment("Testing") && bypassInTesting)
+            return true;
+
         var ip = GetClientIp(ctx);
         if (ip is null) return false;
 
         var allowLoopback = config.GetValue("Security:AllowLoopbackInDevelopment", true);
-        if (allowLoopback && env.IsDevelopment() && IPAddress.IsLoopback(ip))
+        if (allowLoopback && (env.IsDevelopment() || env.IsEnvironment("Testing")) && IPAddress.IsLoopback(ip))
             return true;
 
-        var cidrs = config.GetSection("Security:AllowedCidrs").Get<string[]>() ?? Array.Empty<string>();
-        if (cidrs.Length == 0) return true; // no restriction -> allow all
+        var cidrs = (config.GetSection("Security:AllowedCidrs").Get<string[]>() ?? Array.Empty<string>())
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .ToArray();
 
-        // Only IPv4 CIDR implemented (common for internal networks).
-        // If you want IPv6 CIDR too, tell me to extend it.
+        if (cidrs.Length == 0) return true;
+
         if (ip.AddressFamily != AddressFamily.InterNetwork)
             return false;
 
