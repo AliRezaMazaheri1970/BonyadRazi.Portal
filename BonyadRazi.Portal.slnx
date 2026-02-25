@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/Core/">
+    <Project Path="Api/Api.csproj" />
+    <Project Path="Application/Application.csproj" />
+    <Project Path="Domain/Domain.csproj" />
+    <Project Path="Infrastructure/Infrastructure.csproj" />
+  </Folder>
+  <Project Path="Gateway/Gateway.csproj" Id="fe86512b-f804-4e15-9488-c2c30edbb8f6" />
+  <Project Path="Shared/Shared.csproj" />
+
+<Folder Name="/Tests/"><Project Path="Tests/BonyadRazi.Portal.SecurityTests/BonyadRazi.Portal.SecurityTests.csproj" /></Folder></Solution>
