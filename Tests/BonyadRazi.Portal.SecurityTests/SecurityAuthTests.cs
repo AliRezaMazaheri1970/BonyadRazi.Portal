@@ -1,22 +1,18 @@
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net;
+using System.Net.Http.Headers;
 using Xunit;
 
 namespace BonyadRazi.Portal.SecurityTests;
 
-public class SecurityAuthTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class SecurityAuthTests : IClassFixture<ApiFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly ApiFactory _factory;
 
-    public SecurityAuthTests(WebApplicationFactory<Program> factory)
+    public SecurityAuthTests(ApiFactory factory)
     {
-        _factory = factory.WithWebHostBuilder(builder =>
-        {
-            builder.UseEnvironment("Testing");
-        });
+        _factory = factory;
     }
 
     [Fact]
@@ -39,10 +35,7 @@ public class SecurityAuthTests : IClassFixture<WebApplicationFactory<Program>>
         var issuer = cfg["Jwt:Issuer"]!;
         var audience = cfg["Jwt:Audience"]!;
 
-        // توکن برای یک tenant
         var tokenTenant = Guid.NewGuid();
-
-        // مسیر با tenant متفاوت => باید Forbid شود (403)
         var routeTenant = Guid.NewGuid();
 
         var token = JwtTestToken.Create(
@@ -52,8 +45,7 @@ public class SecurityAuthTests : IClassFixture<WebApplicationFactory<Program>>
             issuer: issuer,
             audience: audience);
 
-        client.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         var resp = await client.GetAsync($"/api/companies/{routeTenant}");
 
@@ -69,7 +61,6 @@ public class SecurityAuthTests : IClassFixture<WebApplicationFactory<Program>>
         var issuer = cfg["Jwt:Issuer"]!;
         var audience = cfg["Jwt:Audience"]!;
 
-        // tenant یکسان در توکن و مسیر => باید OK شود (200)
         var tenant = Guid.NewGuid();
 
         var token = JwtTestToken.Create(
@@ -79,8 +70,7 @@ public class SecurityAuthTests : IClassFixture<WebApplicationFactory<Program>>
             issuer: issuer,
             audience: audience);
 
-        client.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
         var resp = await client.GetAsync($"/api/companies/{tenant}");
 

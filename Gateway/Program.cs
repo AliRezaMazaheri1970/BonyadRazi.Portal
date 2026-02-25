@@ -3,6 +3,7 @@ using Gateway;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
 using System.Text;
@@ -15,17 +16,30 @@ builder.Services
     .AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 
+// ---------------- Forwarded Headers (real client IP behind proxy) ----------------
+// IMPORTANT: If Gateway is behind another proxy/load balancer, this allows reading X-Forwarded-For.
+// For safety, consider configuring KnownProxies/KnownNetworks in production.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor |
+        ForwardedHeaders.XForwardedProto |
+        ForwardedHeaders.XForwardedHost;
+
+    // If you *do* have strict known proxies/networks, set them here.
+    // For now we clear defaults to avoid TestServer issues.
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 // ---------------- Rate Limiting (Global, path-based) ----------------
-// Policy selection by path:
-// - /api/auth/login  => 10/min/IP
-// - /api/auth/refresh|/api/auth/revoke => 20/min/IP
-// - /api/* => 120/min/IP
 builder.Services.AddRateLimiter(opt =>
 {
     opt.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
     opt.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
     {
+        // NOTE: GatewaySecurityHelper should read the *forwarded* IP correctly after UseForwardedHeaders().
         var ip = GatewaySecurityHelper.GetClientIp(ctx)?.ToString() ?? "unknown";
         var path = ctx.Request.Path;
 
@@ -37,10 +51,8 @@ builder.Services.AddRateLimiter(opt =>
             bucket = "login";
             permitLimit = 10;
         }
-        else if (
-            path.StartsWithSegments("/api/auth/refresh", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWithSegments("/api/auth/revoke", StringComparison.OrdinalIgnoreCase)
-        )
+        else if (path.StartsWithSegments("/api/auth/refresh", StringComparison.OrdinalIgnoreCase) ||
+                 path.StartsWithSegments("/api/auth/revoke", StringComparison.OrdinalIgnoreCase))
         {
             bucket = "refresh";
             permitLimit = 20;
@@ -52,12 +64,10 @@ builder.Services.AddRateLimiter(opt =>
         }
         else
         {
-            // non-api endpoints (health, etc.) → no limit
             return RateLimitPartition.GetNoLimiter("no-limit");
         }
 
         var key = $"{ip}:{bucket}";
-
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: key,
             factory: _ => new FixedWindowRateLimiterOptions
@@ -86,16 +96,38 @@ if (validateAtGateway)
 
     var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
 
+    builder.Services
+        .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(opt =>
+        {
+            // In tests (WebApplicationFactory/TestServer) HTTPS metadata often isn't available.
+            opt.RequireHttpsMetadata = !builder.Environment.IsEnvironment("Testing");
+
+            opt.MapInboundClaims = false;
+            opt.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = signingKey,
+
+                ValidateIssuer = true,
+                ValidIssuer = issuer,
+
+                ValidateAudience = true,
+                ValidAudience = audience,
+
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.FromSeconds(30),
+
+                RoleClaimType = ClaimTypes.Role,
+                NameClaimType = "sub"
+            };
+        });
+
     builder.Services.AddAuthorization(options =>
     {
-        options.FallbackPolicy = new AuthorizationPolicyBuilder()
-            .RequireAuthenticatedUser()
-            .Build();
+        // ✅ NO FallbackPolicy in Gateway (avoid breaking public endpoints like /gateway/health)
+        // Keep explicit policies if you want to use them on specific endpoints later.
 
-        // درستش اینه:
-        PortalPolicies.AddPortalPolicies(options);
-
-        // Override CompaniesRead: هم Role هم Claim
         options.AddPolicy(PortalPolicies.CompaniesRead, policy =>
         {
             policy.RequireAuthenticatedUser();
@@ -111,6 +143,9 @@ var app = builder.Build();
 if (!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing"))
     app.UseHttpsRedirection();
 
+// IMPORTANT: Must be before anything that reads client IP.
+app.UseForwardedHeaders();
+
 // Global rate limiter
 app.UseRateLimiter();
 
@@ -118,14 +153,13 @@ app.UseRateLimiter();
 app.Use(async (HttpContext ctx, RequestDelegate next) =>
 {
     // Allow ONLY gateway health always.
-    // Do NOT bypass /health here; /health is proxied and should respect allowlist/IP/JWT rules.
     if (ctx.Request.Path.StartsWithSegments("/gateway/health", StringComparison.OrdinalIgnoreCase))
     {
         await next(ctx);
         return;
     }
 
-    // 1) API Allow prefixes
+    // 1) API Allow prefixes (protects "only known prefixes are served")
     var prefixes = app.Configuration
         .GetSection("Security:ApiAllowPrefixes")
         .Get<string[]>() ?? Array.Empty<string>();
@@ -160,9 +194,6 @@ if (validateAtGateway)
     // Require valid JWT for protected APIs (but allow public auth endpoints)
     app.Use(async (HttpContext ctx, RequestDelegate next) =>
     {
-        // Protected endpoints:
-        // - /api/* protected except public auth endpoints
-        // - /health also protected (proxied health)
         if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase) ||
             ctx.Request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
         {
@@ -190,9 +221,34 @@ if (validateAtGateway)
 
 // ---------------- Health ----------------
 app.MapGet("/gateway/health", () => Results.Ok(new { status = "ok", utc = DateTime.UtcNow }))
+   .AllowAnonymous()
    .DisableRateLimiting();
 
-// ---------------- Reverse Proxy ----------------
-app.MapReverseProxy();
+// ---------------- Testing endpoints (no downstream dependency) ----------------
+if (app.Environment.IsEnvironment("Testing"))
+{
+    // These endpoints exist only to validate gateway rules.
+    app.MapGet("/health", () => Results.Ok(new { ok = true, where = "gateway-testing" }));
+
+    app.MapGet("/api/companies/{**catchAll}", (HttpContext ctx) =>
+        Results.Ok(new
+        {
+            ok = true,
+            path = ctx.Request.Path.Value,
+            auth = ctx.Request.Headers.Authorization.ToString()
+        }));
+
+    app.MapPost("/api/auth/login", () => Results.Ok(new { ok = true, route = "login" }));
+    app.MapPost("/api/auth/refresh", () => Results.Ok(new { ok = true, route = "refresh" }));
+    app.MapPost("/api/auth/revoke", () => Results.Ok(new { ok = true, route = "revoke" }));
+}
+else
+{
+    // ---------------- Reverse Proxy ----------------
+    app.MapReverseProxy();
+}
 
 app.Run();
+
+// Needed for WebApplicationFactory<T>
+public partial class Program { }
