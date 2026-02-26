@@ -32,7 +32,6 @@ builder.Services
     .AddJwtBearer(opt =>
     {
         opt.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
-
         opt.MapInboundClaims = false;
 
         opt.TokenValidationParameters = new TokenValidationParameters
@@ -124,7 +123,7 @@ var app = builder.Build();
 // --------------------
 // Public health
 // --------------------
-app.MapGet("/health", () =>
+app.MapGet("/gateway/health", () =>
 {
     return Results.Json(new
     {
@@ -186,10 +185,31 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-// --------------------
-// Reverse Proxy
-// --------------------
-app.MapReverseProxy();
+// --------------------------------------------------------------------
+// ✅ TESTING MODE (no downstream):
+// if env=Testing OR config Security:ForceTestingEndpoints=true,
+// do NOT call MapReverseProxy(). Instead, expose stub endpoints.
+// --------------------------------------------------------------------
+var forceTestingEndpoints = app.Configuration.GetValue("Security:ForceTestingEndpoints", false);
+var useTestingEndpoints = app.Environment.IsEnvironment("Testing") || forceTestingEndpoints;
+
+if (useTestingEndpoints)
+{
+    // NOTE: these are only for GatewayTests to avoid 504 due to missing upstream
+    app.MapGet("/api/companies/{**catchAll}", (HttpContext ctx) =>
+        Results.Ok(new { ok = true, path = ctx.Request.Path.Value }));
+
+    app.MapPost("/api/auth/login", () => Results.Ok(new { ok = true }));
+    app.MapPost("/api/auth/refresh", () => Results.Ok(new { ok = true }));
+    app.MapPost("/api/auth/revoke", () => Results.Ok(new { ok = true }));
+}
+else
+{
+    // --------------------
+    // Reverse Proxy
+    // --------------------
+    app.MapReverseProxy();
+}
 
 app.Run();
 
