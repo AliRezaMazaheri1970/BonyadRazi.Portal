@@ -26,10 +26,12 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
         ForwardedHeaders.XForwardedProto |
         ForwardedHeaders.XForwardedHost;
 
-    // If you *do* have strict known proxies/networks, set them here.
-    // For now we clear defaults to avoid TestServer issues.
-    options.KnownNetworks.Clear();
+    // ✅ .NET 10: use KnownIPNetworks (System.Net.IPNetwork)
+    options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
+
+    // اگر قبلاً KnownNetworks.Clear می‌کردی برای پذیرش همه‌ی پراکسی‌ها،
+    // بهتره در PROD به جای "clear کردن همه"، KnownProxies/KnownIPNetworks رو دقیق ست کنی.
 });
 
 // ---------------- Rate Limiting (Global, path-based) ----------------
