@@ -50,13 +50,13 @@ builder.Services.AddRateLimiter(opt =>
         if (path.StartsWithSegments("/api/auth/login", StringComparison.OrdinalIgnoreCase))
         {
             bucket = "login";
-            permitLimit = 10;
+            permitLimit = 5;
         }
         else if (path.StartsWithSegments("/api/auth/refresh", StringComparison.OrdinalIgnoreCase) ||
                  path.StartsWithSegments("/api/auth/revoke", StringComparison.OrdinalIgnoreCase))
         {
             bucket = "refresh";
-            permitLimit = 20;
+            permitLimit = 10;
         }
         else if (path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
         {

@@ -65,26 +65,41 @@ public sealed class SecurityDeniedAuditMiddleware
         return Guid.TryParse(raw, out var g) ? g : null;
     }
 
+    //private static string ResolveClientIp(HttpContext context)
+    //{
+    //    try
+    //    {
+    //        if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var fwd))
+    //        {
+    //            var first = fwd.ToString()
+    //                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    //                .FirstOrDefault();
+
+    //            if (IPAddress.TryParse(first, out var parsed))
+    //            {
+    //                if (parsed.IsIPv4MappedToIPv6) parsed = parsed.MapToIPv4();
+    //                return parsed.ToString();
+    //            }
+
+    //            if (!string.IsNullOrWhiteSpace(first))
+    //                return first!;
+    //        }
+
+    //        var ip = context.Connection.RemoteIpAddress;
+    //        if (ip is null) return "unknown";
+    //        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+    //        return ip.ToString();
+    //    }
+    //    catch
+    //    {
+    //        return "unknown";
+    //    }
+    //}
+
     private static string ResolveClientIp(HttpContext context)
     {
         try
         {
-            if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var fwd))
-            {
-                var first = fwd.ToString()
-                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .FirstOrDefault();
-
-                if (IPAddress.TryParse(first, out var parsed))
-                {
-                    if (parsed.IsIPv4MappedToIPv6) parsed = parsed.MapToIPv4();
-                    return parsed.ToString();
-                }
-
-                if (!string.IsNullOrWhiteSpace(first))
-                    return first!;
-            }
-
             var ip = context.Connection.RemoteIpAddress;
             if (ip is null) return "unknown";
             if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
