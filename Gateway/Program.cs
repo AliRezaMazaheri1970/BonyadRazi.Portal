@@ -195,8 +195,9 @@ if (validateAtGateway)
     // Require valid JWT for protected APIs (but allow public auth endpoints)
     app.Use(async (HttpContext ctx, RequestDelegate next) =>
     {
-        if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase) ||
-            ctx.Request.Path.Equals("/health", StringComparison.OrdinalIgnoreCase))
+        // ✅ Only /api/* is protected by JWT here.
+        // Health endpoints must remain public.
+        if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
         {
             // Public endpoints (no JWT needed)
             if (ctx.Request.Path.StartsWithSegments("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
@@ -225,12 +226,15 @@ app.MapGet("/gateway/health", () => Results.Ok(new { status = "ok", utc = DateTi
    .AllowAnonymous()
    .DisableRateLimiting();
 
+// ✅ Public health endpoint on the Gateway (no proxy, no JWT)
+app.MapGet("/health", () => Results.Ok(new { status = "ok", where = "gateway", utc = DateTime.UtcNow }))
+   .AllowAnonymous()
+   .DisableRateLimiting();
+
 // ---------------- Testing endpoints (no downstream dependency) ----------------
 if (app.Environment.IsEnvironment("Testing"))
 {
     // These endpoints exist only to validate gateway rules.
-    app.MapGet("/health", () => Results.Ok(new { ok = true, where = "gateway-testing" }));
-
     app.MapGet("/api/companies/{**catchAll}", (HttpContext ctx) =>
         Results.Ok(new
         {
