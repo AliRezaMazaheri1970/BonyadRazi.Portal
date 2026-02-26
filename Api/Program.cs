@@ -1,4 +1,14 @@
+/*
+Program.cs - Composition Root and Middleware Pipeline
+
+This file configures the application's composition root: dependency injection, configuration validation,
+authentication and authorization schemes, database context registration, and audit logging services.
+The middleware pipeline enforces authentication and authorization and registers a custom security audit
+middleware. Top-level statements are used to host the application with minimal API style entry point.
+*/
+
 using BonyadRazi.Portal.Api.Audit;
+using BonyadRazi.Portal.Api.AuthCleanup;
 using BonyadRazi.Portal.Api.Middleware;
 using BonyadRazi.Portal.Api.Security;
 using BonyadRazi.Portal.Application.Abstractions;
@@ -16,31 +26,27 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
-// ---- Secrets Hygiene: JWT key only from env ----
 var jwtKey = Environment.GetEnvironmentVariable("JWT_SIGNING_KEY");
 if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
-    throw new InvalidOperationException("JWT_SIGNING_KEY is missing or too short (min 32 chars).");
+    throw new InvalidOperationException("JWT_SIGNING_KEY is missing or too short (minimum 32 characters).");
 
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
 
 var issuer = builder.Configuration["Jwt:Issuer"];
 var audience = builder.Configuration["Jwt:Audience"];
 if (string.IsNullOrWhiteSpace(issuer) || string.IsNullOrWhiteSpace(audience))
-    throw new InvalidOperationException("Jwt:Issuer / Jwt:Audience missing in configuration.");
+    throw new InvalidOperationException("Jwt:Issuer and Jwt:Audience must be provided in configuration.");
 
-// ---- DB (RasfPorta) ----
 builder.Services.AddDbContext<RasfPortalDbContext>(opt =>
 {
     opt.UseSqlServer(builder.Configuration.GetConnectionString("RasfPorta"));
 });
 
-// ---- Authentication ----
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
     {
-        opt.RequireHttpsMetadata =
-            !builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing");
+        opt.RequireHttpsMetadata = !builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing");
 
         opt.MapInboundClaims = false;
 
@@ -63,18 +69,14 @@ builder.Services
         };
     });
 
-// ---- Authorization ----
 builder.Services.AddAuthorization(options =>
 {
-    // Default deny (fallback): everything requires auth unless explicitly allowed
     options.FallbackPolicy = new AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
         .Build();
 
-    // Register all policies (Admin/SuperAdmin by default)
     PortalPolicies.AddPortalPolicies(options);
 
-    // Override CompaniesRead to also require tenant claim
     options.AddPolicy(PortalPolicies.CompaniesRead, policy =>
     {
         policy.RequireAuthenticatedUser();
@@ -83,7 +85,9 @@ builder.Services.AddAuthorization(options =>
     });
 });
 
-// ---- Audit logging service ----
+builder.Services.Configure<AuthCleanupOptions>(builder.Configuration.GetSection("AuthCleanup"));
+builder.Services.AddHostedService<RefreshTokenCleanupHostedService>();
+
 if (builder.Environment.IsEnvironment("Testing"))
     builder.Services.AddSingleton<IUserActionLogService, NoOpUserActionLogService>();
 else
@@ -102,7 +106,7 @@ if (app.Environment.IsDevelopment())
 
     try
     {
-        // اگر migration اجرا نشده باشد، این بخش ممکن است خطا بدهد.
+        // Development-only: create a default administrator account if migrations have been applied
         if (!await db.UserAccounts.AnyAsync(x => x.Username == "admin"))
         {
             var (hash, salt, it) = hasher.Hash("admin");
@@ -150,4 +154,7 @@ app.UseAuthorization();
 app.MapControllers();
 app.Run();
 
+/// <summary>
+/// Program entry point partial class used to enable integration testing via <see cref="Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory{TEntryPoint}"/>.
+/// </summary>
 public partial class Program { }

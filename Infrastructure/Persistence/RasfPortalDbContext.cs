@@ -16,6 +16,8 @@ public sealed class RasfPortalDbContext : DbContext
     // ✅ NEW
     public DbSet<UserAccount> UserAccounts => Set<UserAccount>();
 
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -67,6 +69,35 @@ public sealed class RasfPortalDbContext : DbContext
 
             e.HasIndex(x => x.CompanyCode);
             e.HasIndex(x => x.IsActive);
+        });
+
+        modelBuilder.Entity<RefreshToken>(e =>
+        {
+            e.ToTable("RefreshTokens");
+
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.UserAccountId).IsRequired();
+
+            e.Property(x => x.TokenHash)
+                .IsRequired()
+                .HasMaxLength(64); // SHA-256 hex length
+
+            e.Property(x => x.CreatedUtc).IsRequired();
+            e.Property(x => x.ExpiresUtc).IsRequired();
+
+            e.Property(x => x.RevokedUtc);
+            e.Property(x => x.RevokeReason).HasMaxLength(256);
+
+            e.Property(x => x.ReplacedByTokenId);
+
+            e.HasIndex(x => x.UserAccountId);
+            e.HasIndex(x => x.TokenHash).IsUnique();
+
+            e.HasOne<UserAccount>()
+             .WithMany()
+             .HasForeignKey(x => x.UserAccountId)
+             .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

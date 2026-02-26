@@ -1,13 +1,15 @@
-﻿using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
-using BonyadRazi.Portal.Api.Security;
+﻿using BonyadRazi.Portal.Api.Security;
+using BonyadRazi.Portal.Infrastructure.Audit.Entities;
 using BonyadRazi.Portal.Infrastructure.Auth.Entities;
 using BonyadRazi.Portal.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace BonyadRazi.Portal.Api.Controllers;
 
@@ -31,7 +33,15 @@ public sealed class AuthController : ControllerBase
     }
 
     public sealed record LoginRequest(string Username, string Password);
-    public sealed record TokenResponse(string access_token, int expires_in);
+    public sealed record RefreshRequest(string refresh_token);
+    public sealed record RevokeRequest(string refresh_token);
+
+    public sealed record TokenResponse(
+        string access_token,
+        int expires_in,
+        string refresh_token,
+        int refresh_expires_in
+    );
 
     [HttpPost("login")]
     [AllowAnonymous]
@@ -73,30 +83,143 @@ public sealed class AuthController : ControllerBase
         // Success reset
         user.FailedLoginCount = 0;
         user.LockoutEndUtc = null;
-        await _db.SaveChangesAsync();
 
         // ✅ RoadMap: 15 minutes
-        var minutes = _cfg.GetValue("Jwt:AccessTokenMinutes", 15);
+        var accessMinutes = _cfg.GetValue("Jwt:AccessTokenMinutes", 15);
+        var accessToken = IssueJwt(user, accessMinutes);
 
-        var token = IssueJwt(user, minutes);
+        // ✅ Refresh token واقعی
+        var refreshDays = _cfg.GetValue("Jwt:RefreshTokenDays", 30);
 
-        return Ok(new TokenResponse(token, expires_in: minutes * 60));
+        var refreshRaw = GenerateRefreshTokenRaw();
+        var refreshHash = Sha256Hex(refreshRaw);
+
+        var refreshEntity = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserAccountId = user.Id,
+            TokenHash = refreshHash,
+            CreatedUtc = now,
+            ExpiresUtc = now.AddDays(refreshDays),
+            RevokedUtc = null,
+            RevokeReason = null,
+            ReplacedByTokenId = null
+        };
+
+        _db.RefreshTokens.Add(refreshEntity);
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new TokenResponse(
+            access_token: accessToken,
+            expires_in: accessMinutes * 60,
+            refresh_token: refreshRaw,
+            refresh_expires_in: refreshDays * 24 * 3600
+        ));
     }
 
     [HttpPost("refresh")]
     [AllowAnonymous]
-    public IActionResult Refresh()
+    public async Task<ActionResult<TokenResponse>> Refresh([FromBody] RefreshRequest req)
     {
-        // در Dev فعلاً refresh ساده است (بعداً می‌تونی واقعی‌اش کنی)
-        return Unauthorized(new { message = "Not implemented in dev-db mode. Use login." });
+        if (req is null || string.IsNullOrWhiteSpace(req.refresh_token))
+            return BadRequest(new { message = "refresh_token_required" });
+
+        var now = DateTime.UtcNow;
+        var oldHash = Sha256Hex(req.refresh_token);
+
+        var oldToken = await _db.RefreshTokens.SingleOrDefaultAsync(x => x.TokenHash == oldHash);
+        if (oldToken is null)
+            return Unauthorized(new { message = "invalid_refresh" });
+
+        if (!IsRefreshActive(oldToken, now))
+            return Unauthorized(new { message = "refresh_not_active" });
+
+        var user = await _db.UserAccounts.SingleOrDefaultAsync(x => x.Id == oldToken.UserAccountId);
+        if (user is null || !user.IsActive)
+            return Unauthorized(new { message = "invalid_user" });
+
+        // Rotate: revoke old + issue new
+        var refreshDays = _cfg.GetValue("Jwt:RefreshTokenDays", 30);
+
+        var newRaw = GenerateRefreshTokenRaw();
+        var newHash = Sha256Hex(newRaw);
+
+        var newToken = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserAccountId = user.Id,
+            TokenHash = newHash,
+            CreatedUtc = now,
+            ExpiresUtc = now.AddDays(refreshDays),
+            RevokedUtc = null,
+            RevokeReason = null,
+            ReplacedByTokenId = null
+        };
+
+        oldToken.RevokedUtc = now;
+        oldToken.RevokeReason = "rotated";
+        oldToken.ReplacedByTokenId = newToken.Id;
+
+        _db.RefreshTokens.Add(newToken);
+        await _db.SaveChangesAsync();
+
+        var accessMinutes = _cfg.GetValue("Jwt:AccessTokenMinutes", 15);
+        var accessToken = IssueJwt(user, accessMinutes);
+
+        return Ok(new TokenResponse(
+            access_token: accessToken,
+            expires_in: accessMinutes * 60,
+            refresh_token: newRaw,
+            refresh_expires_in: refreshDays * 24 * 3600
+        ));
     }
 
     [HttpPost("revoke")]
     [AllowAnonymous]
-    public IActionResult Revoke()
+    public async Task<IActionResult> Revoke([FromBody] RevokeRequest req)
     {
-        // در Dev فعلاً revoke ساده است (بعداً می‌تونی واقعی‌اش کنی)
+        if (req is null || string.IsNullOrWhiteSpace(req.refresh_token))
+            return BadRequest(new { message = "refresh_token_required" });
+
+        var now = DateTime.UtcNow;
+        var hash = Sha256Hex(req.refresh_token);
+
+        var token = await _db.RefreshTokens.SingleOrDefaultAsync(x => x.TokenHash == hash);
+
+        // idempotent
+        if (token is null)
+            return Ok(new { ok = true });
+
+        if (token.RevokedUtc is null)
+        {
+            token.RevokedUtc = now;
+            token.RevokeReason = "manual_revoke";
+            await _db.SaveChangesAsync();
+        }
+
         return Ok(new { ok = true });
+    }
+
+    private static bool IsRefreshActive(RefreshToken t, DateTime utcNow)
+        => t.RevokedUtc is null && utcNow < t.ExpiresUtc;
+
+    private static string GenerateRefreshTokenRaw()
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        return Convert.ToBase64String(bytes)
+            .Replace("+", "-")
+            .Replace("/", "_")
+            .TrimEnd('=');
+    }
+
+    private static string Sha256Hex(string input)
+    {
+        var bytes = Encoding.UTF8.GetBytes(input);
+        var hash = SHA256.HashData(bytes);
+        var sb = new StringBuilder(hash.Length * 2);
+        foreach (var b in hash) sb.Append(b.ToString("x2"));
+        return sb.ToString();
     }
 
     private string IssueJwt(UserAccount user, int minutes)
@@ -118,12 +241,10 @@ public sealed class AuthController : ControllerBase
             new("sub", user.Id.ToString()),
         };
 
-        // نقش‌ها: اگر چندتا نقش داری با کاما جدا کردی، چند claim بساز
         var roles = (user.Roles ?? "")
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         if (roles.Length == 0) roles = new[] { "User" };
-
         foreach (var r in roles)
             claims.Add(new(ClaimTypes.Role, r));
 

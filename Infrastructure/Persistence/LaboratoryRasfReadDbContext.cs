@@ -1,4 +1,5 @@
-﻿using BonyadRazi.Portal.Infrastructure.Persistence.ReadModels;
+﻿using BonyadRazi.Portal.Infrastructure.Audit.Entities;
+using BonyadRazi.Portal.Infrastructure.Persistence.ReadModels;
 using Microsoft.EntityFrameworkCore;
 
 namespace BonyadRazi.Portal.Infrastructure.Persistence;
