@@ -89,7 +89,44 @@ if (builder.Environment.IsEnvironment("Testing"))
 else
     builder.Services.AddScoped<IUserActionLogService, DbUserActionLogService>();
 
+builder.Services.AddSingleton<Pbkdf2PasswordHasher>();
+
 var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<RasfPortalDbContext>();
+    var hasher = scope.ServiceProvider.GetRequiredService<Pbkdf2PasswordHasher>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("DevSeed");
+
+    try
+    {
+        // اگر migration اجرا نشده باشد، این بخش ممکن است خطا بدهد.
+        if (!await db.UserAccounts.AnyAsync(x => x.Username == "admin"))
+        {
+            var (hash, salt, it) = hasher.Hash("admin");
+
+            db.UserAccounts.Add(new BonyadRazi.Portal.Infrastructure.Auth.Entities.UserAccount
+            {
+                Username = "admin",
+                PasswordHash = hash,
+                PasswordSalt = salt,
+                PasswordIterations = it,
+                Roles = "Admin",
+                CompanyCode = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                IsActive = true
+            });
+
+            await db.SaveChangesAsync();
+            logger.LogInformation("DevSeed: admin user created.");
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "DevSeed skipped (likely migrations not applied yet).");
+    }
+}
 
 if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing"))
 {

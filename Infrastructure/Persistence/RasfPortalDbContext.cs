@@ -1,4 +1,5 @@
 using BonyadRazi.Portal.Infrastructure.Audit.Entities;
+using BonyadRazi.Portal.Infrastructure.Auth.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace BonyadRazi.Portal.Infrastructure.Persistence;
@@ -11,6 +12,9 @@ public sealed class RasfPortalDbContext : DbContext
     }
 
     public DbSet<UserActionLog> UserActionLogs => Set<UserActionLog>();
+
+    // ✅ NEW
+    public DbSet<UserAccount> UserAccounts => Set<UserAccount>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -43,6 +47,26 @@ public sealed class RasfPortalDbContext : DbContext
             e.HasIndex(x => x.CompanyCode);
             e.HasIndex(x => x.ActionType);
             e.HasIndex(x => x.StatusCode);
+        });
+
+        modelBuilder.Entity<UserAccount>(e =>
+        {
+            e.ToTable("UserAccounts");
+            e.HasKey(x => x.Id);
+
+            e.Property(x => x.Username).IsRequired().HasMaxLength(100);
+            e.HasIndex(x => x.Username).IsUnique();
+
+            e.Property(x => x.PasswordHash).IsRequired();
+            e.Property(x => x.PasswordSalt).IsRequired();
+
+            e.Property(x => x.PasswordIterations).IsRequired();
+
+            e.Property(x => x.Roles).HasMaxLength(200);
+            e.Property(x => x.IsActive).IsRequired();
+
+            e.HasIndex(x => x.CompanyCode);
+            e.HasIndex(x => x.IsActive);
         });
     }
 }

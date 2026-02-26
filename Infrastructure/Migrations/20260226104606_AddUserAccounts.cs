@@ -1,0 +1,58 @@
+﻿using System;
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace Infrastructure.Migrations
+{
+    /// <inheritdoc />
+    public partial class AddUserAccounts : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.CreateTable(
+                name: "UserAccounts",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
+                    Username = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
+                    PasswordHash = table.Column<byte[]>(type: "varbinary(max)", nullable: false),
+                    PasswordSalt = table.Column<byte[]>(type: "varbinary(max)", nullable: false),
+                    PasswordIterations = table.Column<int>(type: "int", nullable: false),
+                    FailedLoginCount = table.Column<int>(type: "int", nullable: false),
+                    LockoutEndUtc = table.Column<DateTime>(type: "datetime2", nullable: true),
+                    Roles = table.Column<string>(type: "nvarchar(200)", maxLength: 200, nullable: false),
+                    CompanyCode = table.Column<Guid>(type: "uniqueidentifier", nullable: true),
+                    IsActive = table.Column<bool>(type: "bit", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_UserAccounts", x => x.Id);
+                });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_UserAccounts_CompanyCode",
+                table: "UserAccounts",
+                column: "CompanyCode");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_UserAccounts_IsActive",
+                table: "UserAccounts",
+                column: "IsActive");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_UserAccounts_Username",
+                table: "UserAccounts",
+                column: "Username",
+                unique: true);
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropTable(
+                name: "UserAccounts");
+        }
+    }
+}

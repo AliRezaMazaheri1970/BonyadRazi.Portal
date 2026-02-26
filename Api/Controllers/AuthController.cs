@@ -1,8 +1,12 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using BonyadRazi.Portal.Api.Security;
+using BonyadRazi.Portal.Infrastructure.Auth.Entities;
+using BonyadRazi.Portal.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
 namespace BonyadRazi.Portal.Api.Controllers;
@@ -11,66 +15,91 @@ namespace BonyadRazi.Portal.Api.Controllers;
 [Route("api/auth")]
 public sealed class AuthController : ControllerBase
 {
+    private readonly RasfPortalDbContext _db;
     private readonly IConfiguration _cfg;
+    private readonly Pbkdf2PasswordHasher _hasher;
 
-    // یک کاربر Dev برای تست
-    private static readonly Guid DevAdminUserId = Guid.Parse("11111111-1111-1111-1111-111111111111");
-    private static readonly Guid DevCompanyCode = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    // Lockout policy (Dev)
+    private const int MaxFailedAttempts = 5;
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(5);
 
-    public AuthController(IConfiguration cfg)
+    public AuthController(RasfPortalDbContext db, IConfiguration cfg, Pbkdf2PasswordHasher hasher)
     {
+        _db = db;
         _cfg = cfg;
+        _hasher = hasher;
     }
 
     public sealed record LoginRequest(string Username, string Password);
-
     public sealed record TokenResponse(string access_token, int expires_in);
 
     [HttpPost("login")]
     [AllowAnonymous]
-    public ActionResult<TokenResponse> Login([FromBody] LoginRequest req)
+    public async Task<ActionResult<TokenResponse>> Login([FromBody] LoginRequest req)
     {
-        // TODO: بعداً این قسمت را به DB/Identity وصل کن
-        if (!string.Equals(req.Username, "admin", StringComparison.OrdinalIgnoreCase) ||
-            req.Password != "admin")
+        var username = (req.Username ?? "").Trim();
+
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(req.Password))
+            return Unauthorized(new { message = "Invalid credentials." });
+
+        var user = await _db.UserAccounts.SingleOrDefaultAsync(x => x.Username == username);
+
+        // جلوگیری از user-enumeration
+        if (user is null || !user.IsActive)
+            return Unauthorized(new { message = "Invalid credentials." });
+
+        var now = DateTime.UtcNow;
+
+        // Lockout check
+        if (user.LockoutEndUtc is not null && user.LockoutEndUtc.Value > now)
+            return Unauthorized(new { message = "Account locked. Try later." });
+
+        // Verify password (PBKDF2)
+        var ok = _hasher.Verify(req.Password, user.PasswordSalt, user.PasswordIterations, user.PasswordHash);
+        if (!ok)
         {
+            user.FailedLoginCount++;
+
+            if (user.FailedLoginCount >= MaxFailedAttempts)
+            {
+                user.LockoutEndUtc = now.Add(LockoutDuration);
+                user.FailedLoginCount = 0;
+            }
+
+            await _db.SaveChangesAsync();
             return Unauthorized(new { message = "Invalid credentials." });
         }
 
-        var token = IssueJwt(
-            userId: DevAdminUserId,
-            role: "Admin",
-            companyCode: DevCompanyCode,
-            minutes: _cfg.GetValue("Jwt:AccessTokenMinutes", 30)
-        );
+        // Success reset
+        user.FailedLoginCount = 0;
+        user.LockoutEndUtc = null;
+        await _db.SaveChangesAsync();
 
-        return Ok(new TokenResponse(token, expires_in: _cfg.GetValue("Jwt:AccessTokenMinutes", 30) * 60));
+        // ✅ RoadMap: 15 minutes
+        var minutes = _cfg.GetValue("Jwt:AccessTokenMinutes", 15);
+
+        var token = IssueJwt(user, minutes);
+
+        return Ok(new TokenResponse(token, expires_in: minutes * 60));
     }
 
-    // برای Dev ساده: refresh هم یک JWT جدید می‌دهد
     [HttpPost("refresh")]
     [AllowAnonymous]
-    public ActionResult<TokenResponse> Refresh()
+    public IActionResult Refresh()
     {
-        var token = IssueJwt(
-            userId: DevAdminUserId,
-            role: "Admin",
-            companyCode: DevCompanyCode,
-            minutes: _cfg.GetValue("Jwt:AccessTokenMinutes", 30)
-        );
-
-        return Ok(new TokenResponse(token, expires_in: _cfg.GetValue("Jwt:AccessTokenMinutes", 30) * 60));
+        // در Dev فعلاً refresh ساده است (بعداً می‌تونی واقعی‌اش کنی)
+        return Unauthorized(new { message = "Not implemented in dev-db mode. Use login." });
     }
 
-    // برای Dev: revoke صرفاً OK
     [HttpPost("revoke")]
     [AllowAnonymous]
     public IActionResult Revoke()
     {
+        // در Dev فعلاً revoke ساده است (بعداً می‌تونی واقعی‌اش کنی)
         return Ok(new { ok = true });
     }
 
-    private string IssueJwt(Guid userId, string role, Guid companyCode, int minutes)
+    private string IssueJwt(UserAccount user, int minutes)
     {
         var jwtKey = Environment.GetEnvironmentVariable("JWT_SIGNING_KEY");
         if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
@@ -84,13 +113,22 @@ public sealed class AuthController : ControllerBase
         var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
         var creds = new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
 
-        // IMPORTANT: MapInboundClaims=false است، پس این claimها همانطور می‌مانند.
         var claims = new List<Claim>
         {
-            new("sub", userId.ToString()),                // NameClaimType = "sub"
-            new(ClaimTypes.Role, role),                   // RoleClaimType = ClaimTypes.Role
-            new("company_code", companyCode.ToString())   // برای tenant isolation / CompaniesRead
+            new("sub", user.Id.ToString()),
         };
+
+        // نقش‌ها: اگر چندتا نقش داری با کاما جدا کردی، چند claim بساز
+        var roles = (user.Roles ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (roles.Length == 0) roles = new[] { "User" };
+
+        foreach (var r in roles)
+            claims.Add(new(ClaimTypes.Role, r));
+
+        if (user.CompanyCode is not null)
+            claims.Add(new("company_code", user.CompanyCode.Value.ToString()));
 
         var token = new JwtSecurityToken(
             issuer: issuer,
