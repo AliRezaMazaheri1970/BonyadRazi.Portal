@@ -35,6 +35,9 @@ jobs:
       - name: Test (SecurityTests)
         run: dotnet test Tests/BonyadRazi.Portal.SecurityTests/BonyadRazi.Portal.SecurityTests.csproj -c Release --no-build --logger "trx;LogFileName=security-auth-tests.trx" --results-directory TestResults
 
+      - name: Test (GatewayTests)
+        run: dotnet test Tests/BonyadRazi.Portal.GatewayTests/BonyadRazi.Portal.GatewayTests.csproj -c Release --no-build --logger "trx;LogFileName=gateway-tests.trx" --results-directory TestResults
+        
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
