@@ -26,7 +26,6 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
         ForwardedHeaders.XForwardedProto |
         ForwardedHeaders.XForwardedHost;
 
-    // ✅ .NET 10: use KnownIPNetworks (System.Net.IPNetwork)
     options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
 
