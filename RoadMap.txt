@@ -1,5 +1,5 @@
 # نقشه راه امنیتی پرتال (نسخه اجرایی)
-# Project: BonyadRazavi.Portal
+# Project: BonyadRazi.Portal
 # Version: 0.3
 # Date: 2026-02-17
 
