@@ -16,6 +16,7 @@
 ---
 
 ## Quick Start (Local)
+
 ### پیش‌نیاز
 - .NET SDK (ترجیحاً نسخه‌ای که پروژه با آن تنظیم شده)
 - دسترسی به DB ها (در صورت نیاز) یا اجرای تست‌ها با InMemory در محیط Testing
@@ -33,6 +34,7 @@
 ---
 
 ## امنیت (خلاصه اجرایی)
+
 ### JWT Validation
 - ValidateIssuer / ValidateAudience / ValidateLifetime = true
 - Issuer: `BonyadRazi.Auth`
@@ -43,7 +45,8 @@
 - NameClaimType = `sub`
 
 ### Default Deny
-- `FallbackPolicy = RequireAuthenticatedUser()`
+- `FallbackPolicy = RequireAuthenticatedUser()` (در API)
+- در Gateway: مسیرهای Public مشخص و باقی مسیرها محافظت‌شده هستند (Allow prefixes + JWT check)
 
 ### Tenant Isolation
 - Tenant فقط از claim `company_code`
@@ -65,26 +68,40 @@
 ---
 
 ## CI / PR Gate
+
 ### GitHub Actions
 Workflow امنیتی:
 - `.github/workflows/security-auth-tests.yml`
 
 این workflow حداقل این‌ها را بررسی می‌کند:
-- build + test در Release
-- اجرای SecurityTests
+- build در Release
+- اجرای **SecurityTests**
+- اجرای **GatewayTests**
 
 ### Branch Protection / Ruleset
 - Ruleset فعال است و Status check زیر برای merge به `master` اجباری است:
-  - `security-auth-test`
+  - `security-auth-tests / test`
+
+### PR Template
+- قالب PR در مسیر زیر نگهداری می‌شود:
+  - `.github/pull_request_template.md`
 
 ---
 
 ## Testing
-### SecurityTests (فعلی)
+
+### SecurityTests
 - بدون توکن → 401
 - cross-tenant → 403
 - same-tenant → 200
 - audit denied: بدون توکن 401، غیرادمین 403، ادمین 200
+
+### GatewayTests
+- `/gateway/health` → 200 (Public)
+- auth endpoints (login/refresh/revoke) → 200 (Public)
+- protected endpoint بدون JWT → 401
+- protected endpoint با JWT → 200
+- IP allowlist (no match) → 403
 
 ### نکته Testing DB
 در CI/Testing از EFCore InMemory استفاده می‌شود تا تست‌ها به DB واقعی وابسته نباشند.
