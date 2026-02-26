@@ -1,7 +1,7 @@
-﻿using BonyadRazi.Portal.Gateway;
-using Microsoft.AspNetCore.Hosting;
+﻿using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using GatewayEntryPoint = BonyadRazi.Portal.Gateway.GatewayEntryPoint;
 
 namespace BonyadRazi.Portal.GatewayTests;
 
