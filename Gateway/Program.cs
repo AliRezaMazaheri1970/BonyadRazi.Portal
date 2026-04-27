@@ -5,6 +5,8 @@ using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,6 +15,67 @@ var builder = WebApplication.CreateBuilder(args);
 // --------------------
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+
+// --------------------
+// Forwarded Headers
+// --------------------
+// Production-safe: trust only configured proxies/networks.
+// This prevents spoofed X-Forwarded-For from arbitrary clients.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor |
+        ForwardedHeaders.XForwardedProto |
+        ForwardedHeaders.XForwardedHost;
+
+    options.KnownProxies.Clear();
+    options.KnownIPNetworks.Clear();
+
+    var requireSymmetry = builder.Configuration.GetValue(
+        "ForwardedHeaders:RequireHeaderSymmetry",
+        true);
+
+    options.RequireHeaderSymmetry = requireSymmetry;
+
+    var forwardLimit = builder.Configuration.GetValue(
+        "ForwardedHeaders:ForwardLimit",
+        1);
+
+    options.ForwardLimit = forwardLimit;
+
+    var proxies = builder.Configuration
+        .GetSection("ForwardedHeaders:KnownProxies")
+        .Get<string[]>() ?? Array.Empty<string>();
+
+    foreach (var proxy in proxies)
+    {
+        if (IPAddress.TryParse(proxy, out var ip))
+            options.KnownProxies.Add(ip);
+    }
+
+    var cidrs = builder.Configuration
+        .GetSection("ForwardedHeaders:KnownCidrs")
+        .Get<string[]>() ?? Array.Empty<string>();
+
+    foreach (var cidr in cidrs)
+    {
+        var parts = cidr.Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (parts.Length != 2)
+            continue;
+
+        if (!IPAddress.TryParse(parts[0], out var networkIp))
+            continue;
+
+        if (!int.TryParse(parts[1], out var prefixLength))
+            continue;
+
+        options.KnownIPNetworks.Add(
+            new System.Net.IPNetwork(networkIp, prefixLength));
+    }
+});
 
 // --------------------
 // JWT validation at Gateway
@@ -150,6 +213,7 @@ builder.Services.AddRateLimiter(opt =>
 });
 
 var app = builder.Build();
+app.UseForwardedHeaders();
 
 // --------------------
 // Public Gateway Health
