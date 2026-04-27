@@ -125,7 +125,6 @@ public class GatewaySecurityTests
             ["Jwt:Audience"] = "BonyadRazi.Portal"
         });
 
-
         var client = factory.CreateClient();
 
         var response = await client.GetAsync("/api/unknown/test");
