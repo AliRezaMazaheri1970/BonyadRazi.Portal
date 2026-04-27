@@ -11,16 +11,16 @@ public sealed class GatewayFactory : WebApplicationFactory<GatewayEntryPoint>
 
     public GatewayFactory(Dictionary<string, string?>? overrides = null)
     {
-        _overrides = overrides ?? new();
+        _overrides = overrides ?? new Dictionary<string, string?>();
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
 
-        builder.ConfigureAppConfiguration((ctx, cfg) =>
+        builder.ConfigureAppConfiguration((context, configurationBuilder) =>
         {
-            cfg.AddInMemoryCollection(_overrides);
+            configurationBuilder.AddInMemoryCollection(_overrides);
         });
     }
 }

@@ -8,25 +8,25 @@ public sealed class RefreshTokenCleanupHostedService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<RefreshTokenCleanupHostedService> _logger;
-    private readonly IOptionsMonitor<AuthCleanupOptions> _opt;
+    private readonly IOptionsMonitor<AuthCleanupOptions> _options;
 
     public RefreshTokenCleanupHostedService(
         IServiceScopeFactory scopeFactory,
         ILogger<RefreshTokenCleanupHostedService> logger,
-        IOptionsMonitor<AuthCleanupOptions> opt)
+        IOptionsMonitor<AuthCleanupOptions> options)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
-        _opt = opt;
+        _options = options;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // PeriodicTimer دقیق و کم‌هزینه
         while (!stoppingToken.IsCancellationRequested)
         {
-            var o = _opt.CurrentValue;
-            if (!o.Enabled)
+            var currentOptions = _options.CurrentValue;
+
+            if (!currentOptions.Enabled)
             {
                 await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
                 continue;
@@ -36,48 +36,55 @@ public sealed class RefreshTokenCleanupHostedService : BackgroundService
             {
                 await RunOnce(stoppingToken);
             }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                // Normal shutdown.
+                return;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "RefreshToken cleanup failed.");
             }
 
-            var delay = TimeSpan.FromMinutes(Math.Max(1, o.RunEveryMinutes));
+            var delay = TimeSpan.FromMinutes(Math.Max(1, currentOptions.RunEveryMinutes));
             await Task.Delay(delay, stoppingToken);
         }
     }
 
-    private async Task RunOnce(CancellationToken ct)
+    private async Task RunOnce(CancellationToken cancellationToken)
     {
-        var o = _opt.CurrentValue;
+        var currentOptions = _options.CurrentValue;
         var now = DateTime.UtcNow;
 
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RasfPortalDbContext>();
 
-        int deletedExpired = 0;
-        int deletedOldRevoked = 0;
+        var deletedExpired = 0;
+        var deletedOldRevoked = 0;
 
-        if (o.DeleteExpired)
+        if (currentOptions.DeleteExpired)
         {
             deletedExpired = await db.RefreshTokens
                 .Where(x => x.ExpiresUtc <= now)
-                .ExecuteDeleteAsync(ct);
+                .ExecuteDeleteAsync(cancellationToken);
         }
 
-        if (o.DeleteRevokedOlderThanDays > 0)
+        if (currentOptions.DeleteRevokedOlderThanDays > 0)
         {
-            var cutoff = now.AddDays(-o.DeleteRevokedOlderThanDays);
+            var cutoff = now.AddDays(-currentOptions.DeleteRevokedOlderThanDays);
 
             deletedOldRevoked = await db.RefreshTokens
                 .Where(x => x.RevokedUtc != null && x.RevokedUtc <= cutoff)
-                .ExecuteDeleteAsync(ct);
+                .ExecuteDeleteAsync(cancellationToken);
         }
 
         if (deletedExpired > 0 || deletedOldRevoked > 0)
         {
             _logger.LogInformation(
                 "RefreshToken cleanup done. deletedExpired={deletedExpired}, deletedOldRevoked={deletedOldRevoked}, utc={utc}",
-                deletedExpired, deletedOldRevoked, now);
+                deletedExpired,
+                deletedOldRevoked,
+                now);
         }
     }
 }

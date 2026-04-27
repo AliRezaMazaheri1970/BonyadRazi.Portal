@@ -1,3 +1,4 @@
+using Gateway;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
@@ -14,7 +15,7 @@ builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
 
 // --------------------
-// JWT validation at Gateway (optional by config flag)
+// JWT validation at Gateway
 // --------------------
 var jwtKey = Environment.GetEnvironmentVariable("JWT_SIGNING_KEY");
 if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
@@ -22,6 +23,7 @@ if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
 
 var issuer = builder.Configuration["Jwt:Issuer"];
 var audience = builder.Configuration["Jwt:Audience"];
+
 if (string.IsNullOrWhiteSpace(issuer) || string.IsNullOrWhiteSpace(audience))
     throw new InvalidOperationException("Jwt:Issuer and Jwt:Audience must be provided in Gateway configuration.");
 
@@ -31,7 +33,10 @@ builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
     {
-        opt.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        opt.RequireHttpsMetadata =
+            !builder.Environment.IsDevelopment() &&
+            !builder.Environment.IsEnvironment("Testing");
+
         opt.MapInboundClaims = false;
 
         opt.TokenValidationParameters = new TokenValidationParameters
@@ -56,25 +61,32 @@ builder.Services
 builder.Services.AddAuthorization();
 
 // --------------------
-// Rate Limiting (global path-aware limiter)
-// - login: 10/min/IP
-// - refresh/revoke: 30/min/IP
+// Rate Limiting
 // --------------------
+// - /api/auth/login             => 10/min/IP
+// - /api/auth/refresh|revoke    => 30/min/IP
+// - other /api/*                => 120/min/IP
 builder.Services.AddRateLimiter(opt =>
 {
     opt.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
     opt.OnRejected = async (ctx, ct) =>
     {
-        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var ra))
-            ctx.HttpContext.Response.Headers["Retry-After"] = ((int)ra.TotalSeconds).ToString();
+        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            ctx.HttpContext.Response.Headers["Retry-After"] =
+                ((int)retryAfter.TotalSeconds).ToString();
+        }
 
         var logger = ctx.HttpContext.RequestServices
             .GetRequiredService<ILoggerFactory>()
-            .CreateLogger("RateLimit");
+            .CreateLogger("Gateway.RateLimit");
 
-        logger.LogWarning("Rate limited: ip={ip} path={path} trace={traceId}",
-            ctx.HttpContext.Connection.RemoteIpAddress?.ToString(),
+        var ip = GatewaySecurityHelper.GetClientIp(ctx.HttpContext)?.ToString() ?? "unknown";
+
+        logger.LogWarning(
+            "Rate limited: ip={ip} path={path} traceId={traceId}",
+            ip,
             ctx.HttpContext.Request.Path.ToString(),
             ctx.HttpContext.TraceIdentifier);
 
@@ -87,41 +99,60 @@ builder.Services.AddRateLimiter(opt =>
 
     opt.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(http =>
     {
-        var ip = http.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var ip = GatewaySecurityHelper.GetClientIp(http)?.ToString() ?? "unknown";
         var path = http.Request.Path.Value ?? "";
 
         if (path.StartsWith("/api/auth/login", StringComparison.OrdinalIgnoreCase))
         {
-            return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 10,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst
-            });
+            return RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey: $"{ip}:login",
+                factory: _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 10,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    AutoReplenishment = true
+                });
         }
 
         if (path.StartsWith("/api/auth/refresh", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("/api/auth/revoke", StringComparison.OrdinalIgnoreCase))
         {
-            return RateLimitPartition.GetFixedWindowLimiter(ip, _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 30,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst
-            });
+            return RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey: $"{ip}:refresh",
+                factory: _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 30,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    AutoReplenishment = true
+                });
         }
 
-        // everything else: no limiter
-        return RateLimitPartition.GetNoLimiter("nolimit");
+        if (path.StartsWith("/api", StringComparison.OrdinalIgnoreCase))
+        {
+            return RateLimitPartition.GetFixedWindowLimiter(
+                partitionKey: $"{ip}:api-standard",
+                factory: _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 120,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    AutoReplenishment = true
+                });
+        }
+
+        return RateLimitPartition.GetNoLimiter("no-limit");
     });
 });
 
 var app = builder.Build();
 
 // --------------------
-// Public health
+// Public Gateway Health
 // --------------------
 app.MapGet("/gateway/health", () =>
 {
@@ -141,14 +172,68 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 // --------------------
-// Enforce JWT for /api/* except allowlist when ValidateJwtAtGateway=true
+// API Allowlist + IP Allowlist
 // --------------------
-bool validateAtGateway = builder.Configuration.GetValue<bool>("Security:ValidateJwtAtGateway");
+app.Use(async (ctx, next) =>
+{
+    // /gateway/health is always public.
+    if (ctx.Request.Path.StartsWithSegments("/gateway/health", StringComparison.OrdinalIgnoreCase))
+    {
+        await next();
+        return;
+    }
 
-static bool IsAuthAllowListed(PathString path) =>
-    path.StartsWithSegments("/api/auth/login") ||
-    path.StartsWithSegments("/api/auth/refresh") ||
-    path.StartsWithSegments("/api/auth/revoke");
+    var path = ctx.Request.Path;
+
+    // Apply API allowlist only to API/service paths.
+    // Do not block WebApp catch-all route "/{**catch-all}".
+    var shouldCheckApiAllowlist =
+        path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/health", StringComparison.OrdinalIgnoreCase);
+
+    if (shouldCheckApiAllowlist)
+    {
+        var prefixes = app.Configuration
+            .GetSection("Security:ApiAllowPrefixes")
+            .Get<string[]>() ?? Array.Empty<string>();
+
+        if (!GatewaySecurityHelper.IsPathAllowedByPrefixes(path, prefixes))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            await ctx.Response.WriteAsJsonAsync(new
+            {
+                message = "not_found",
+                traceId = ctx.TraceIdentifier
+            });
+            return;
+        }
+
+        if (!GatewaySecurityHelper.IsIpAllowed(ctx, app.Configuration, app.Environment))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsJsonAsync(new
+            {
+                message = "forbidden",
+                traceId = ctx.TraceIdentifier
+            });
+            return;
+        }
+    }
+
+    await next();
+});
+
+// --------------------
+// Enforce JWT for protected API paths
+// --------------------
+var validateAtGateway = app.Configuration.GetValue("Security:ValidateJwtAtGateway", true);
+
+static bool IsPublicAuthEndpoint(PathString path)
+{
+    return path.StartsWithSegments("/api/auth/login", StringComparison.OrdinalIgnoreCase) ||
+           path.StartsWithSegments("/api/auth/refresh", StringComparison.OrdinalIgnoreCase) ||
+           path.StartsWithSegments("/api/auth/revoke", StringComparison.OrdinalIgnoreCase);
+}
 
 app.Use(async (ctx, next) =>
 {
@@ -158,26 +243,34 @@ app.Use(async (ctx, next) =>
         return;
     }
 
-    // only protect /api/*
-    if (!ctx.Request.Path.StartsWithSegments("/api"))
+    var path = ctx.Request.Path;
+
+    var shouldRequireJwt =
+        path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/health", StringComparison.OrdinalIgnoreCase);
+
+    if (!shouldRequireJwt)
     {
         await next();
         return;
     }
 
-    // allow anonymous auth endpoints
-    if (IsAuthAllowListed(ctx.Request.Path))
+    if (IsPublicAuthEndpoint(path))
     {
         await next();
         return;
     }
 
-    // enforce auth
     var result = await ctx.AuthenticateAsync(JwtBearerDefaults.AuthenticationScheme);
+
     if (!result.Succeeded || result.Principal is null)
     {
         ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await ctx.Response.WriteAsJsonAsync(new { message = "unauthorized" });
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            message = "unauthorized",
+            traceId = ctx.TraceIdentifier
+        });
         return;
     }
 
@@ -186,28 +279,33 @@ app.Use(async (ctx, next) =>
 });
 
 // --------------------------------------------------------------------
-// ✅ TESTING MODE (no downstream):
-// if env=Testing OR config Security:ForceTestingEndpoints=true,
-// do NOT call MapReverseProxy(). Instead, expose stub endpoints.
+// Testing Mode
 // --------------------------------------------------------------------
+// In Testing, do not call MapReverseProxy because upstream services are
+// not running in CI. Stub endpoints are enough for Gateway security tests.
 var forceTestingEndpoints = app.Configuration.GetValue("Security:ForceTestingEndpoints", false);
 var useTestingEndpoints = app.Environment.IsEnvironment("Testing") || forceTestingEndpoints;
 
 if (useTestingEndpoints)
 {
-    // NOTE: these are only for GatewayTests to avoid 504 due to missing upstream
     app.MapGet("/api/companies/{**catchAll}", (HttpContext ctx) =>
-        Results.Ok(new { ok = true, path = ctx.Request.Path.Value }));
+        Results.Ok(new
+        {
+            ok = true,
+            path = ctx.Request.Path.Value
+        }));
 
-    app.MapPost("/api/auth/login", () => Results.Ok(new { ok = true }));
-    app.MapPost("/api/auth/refresh", () => Results.Ok(new { ok = true }));
-    app.MapPost("/api/auth/revoke", () => Results.Ok(new { ok = true }));
+    app.MapPost("/api/auth/login", () =>
+        Results.Ok(new { ok = true, route = "login" }));
+
+    app.MapPost("/api/auth/refresh", () =>
+        Results.Ok(new { ok = true, route = "refresh" }));
+
+    app.MapPost("/api/auth/revoke", () =>
+        Results.Ok(new { ok = true, route = "revoke" }));
 }
 else
 {
-    // --------------------
-    // Reverse Proxy
-    // --------------------
     app.MapReverseProxy();
 }
 

@@ -2,5 +2,5 @@
 
 public sealed class GatewayEntryPoint
 {
-    // Marker type for WebApplicationFactory
+    // Marker type for WebApplicationFactory.
 }

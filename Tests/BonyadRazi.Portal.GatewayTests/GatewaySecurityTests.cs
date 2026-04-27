@@ -12,13 +12,14 @@ public class GatewaySecurityTests
     {
         await using var factory = new GatewayFactory(new()
         {
-            ["Security:AllowedCidrs:0"] = null, // allow all
+            ["Security:AllowedCidrs:0"] = null
         });
 
         var client = factory.CreateClient();
-        var res = await client.GetAsync("/gateway/health");
 
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var response = await client.GetAsync("/gateway/health");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -26,14 +27,21 @@ public class GatewaySecurityTests
     {
         await using var factory = new GatewayFactory(new()
         {
-            ["Security:AllowedCidrs:0"] = null, // allow all
+            ["Security:AllowedCidrs:0"] = null,
+            ["Security:ValidateJwtAtGateway"] = "true",
+            ["Jwt:Issuer"] = "BonyadRazi.Auth",
+            ["Jwt:Audience"] = "BonyadRazi.Portal"
         });
 
         var client = factory.CreateClient();
 
-        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync("/api/auth/login", new StringContent("{}"))).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync("/api/auth/refresh", new StringContent("{}"))).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync("/api/auth/revoke", new StringContent("{}"))).StatusCode);
+        var loginResponse = await client.PostAsync("/api/auth/login", new StringContent("{}"));
+        var refreshResponse = await client.PostAsync("/api/auth/refresh", new StringContent("{}"));
+        var revokeResponse = await client.PostAsync("/api/auth/revoke", new StringContent("{}"));
+
+        Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, refreshResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, revokeResponse.StatusCode);
     }
 
     [Fact]
@@ -41,16 +49,17 @@ public class GatewaySecurityTests
     {
         await using var factory = new GatewayFactory(new()
         {
-            ["Security:AllowedCidrs:0"] = null, // allow all
+            ["Security:AllowedCidrs:0"] = null,
             ["Security:ValidateJwtAtGateway"] = "true",
             ["Jwt:Issuer"] = "BonyadRazi.Auth",
-            ["Jwt:Audience"] = "BonyadRazi.Portal",
+            ["Jwt:Audience"] = "BonyadRazi.Portal"
         });
 
         var client = factory.CreateClient();
-        var res = await client.GetAsync("/api/companies/anything");
 
-        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        var response = await client.GetAsync("/api/companies/anything");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -58,10 +67,10 @@ public class GatewaySecurityTests
     {
         await using var factory = new GatewayFactory(new()
         {
-            ["Security:AllowedCidrs:0"] = null, // allow all
+            ["Security:AllowedCidrs:0"] = null,
             ["Security:ValidateJwtAtGateway"] = "true",
             ["Jwt:Issuer"] = "BonyadRazi.Auth",
-            ["Jwt:Audience"] = "BonyadRazi.Portal",
+            ["Jwt:Audience"] = "BonyadRazi.Portal"
         });
 
         var client = factory.CreateClient();
@@ -71,14 +80,14 @@ public class GatewaySecurityTests
             companyCode: Guid.Parse("89467084-2A33-4054-8418-97E5E59ED17F"),
             roles: new[] { "Admin" },
             issuer: "BonyadRazi.Auth",
-            audience: "BonyadRazi.Portal"
-        );
+            audience: "BonyadRazi.Portal");
 
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
 
-        var res = await client.GetAsync("/api/companies/demo");
+        var response = await client.GetAsync("/api/companies/demo");
 
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -88,14 +97,38 @@ public class GatewaySecurityTests
         {
             ["Security:BypassIpAllowlistInTesting"] = "false",
             ["Security:AllowLoopbackInDevelopment"] = "false",
+            ["Security:ValidateJwtAtGateway"] = "false",
             ["Security:AllowedCidrs:0"] = "192.168.93.0/27",
+            ["Jwt:Issuer"] = "BonyadRazi.Auth",
+            ["Jwt:Audience"] = "BonyadRazi.Portal"
         });
 
         var client = factory.CreateClient();
 
-        // login endpoint is POST
-        var res = await client.PostAsync("/api/auth/login", new StringContent("{}"));
+        var response = await client.PostAsync("/api/auth/login", new StringContent("{}"));
 
-        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UnknownApiPath_Returns404()
+    {
+        await using var factory = new GatewayFactory(new()
+        {
+            ["Security:AllowedCidrs:0"] = null,
+            ["Security:ValidateJwtAtGateway"] = "false",
+            ["Security:ApiAllowPrefixes:0"] = "/api/auth",
+            ["Security:ApiAllowPrefixes:1"] = "/api/users",
+            ["Security:ApiAllowPrefixes:2"] = "/api/companies",
+            ["Security:ApiAllowPrefixes:3"] = "/api/audit",
+            ["Jwt:Issuer"] = "BonyadRazi.Auth",
+            ["Jwt:Audience"] = "BonyadRazi.Portal"
+        });
+
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/unknown/test");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 }
