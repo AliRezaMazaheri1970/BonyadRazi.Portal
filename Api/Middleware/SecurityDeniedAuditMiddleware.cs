@@ -1,4 +1,3 @@
-using System.Net;
 using System.Security.Claims;
 using BonyadRazi.Portal.Application.Abstractions;
 using Microsoft.AspNetCore.Http;
@@ -23,7 +22,7 @@ public sealed class SecurityDeniedAuditMiddleware
     {
         await _next(context);
 
-        // Avoid recursive auditing of the audit report endpoint itself.
+        // Avoid recursive auditing of audit endpoints.
         if (context.Request.Path.StartsWithSegments("/api/audit"))
             return;
 
@@ -38,25 +37,36 @@ public sealed class SecurityDeniedAuditMiddleware
 
         Guid? companyCode = TryGetGuidClaim(context.User, "company_code");
 
+        var remoteIp = ResolveClientIp(context);
+        var userAgent = Truncate(context.Request.Headers.UserAgent.ToString(), 512);
+        var path = context.Request.Path.ToString();
+        var method = context.Request.Method;
+        var reason = status == StatusCodes.Status401Unauthorized
+            ? "UNAUTHORIZED_401"
+            : "FORBIDDEN_403";
+
         var metadata = new
         {
             utc = DateTime.UtcNow,
 
             statusCode = status,
-            reason = status == StatusCodes.Status401Unauthorized
-                ? "UNAUTHORIZED_401"
-                : "FORBIDDEN_403",
+            reason,
 
-            method = context.Request.Method,
-            path = context.Request.Path.ToString(),
+            method,
+            path,
             queryString = RedactQueryString(context.Request.QueryString.ToString()),
 
             traceId = context.TraceIdentifier,
 
-            remoteIp = ResolveClientIp(context),
-            userAgent = Truncate(context.Request.Headers.UserAgent.ToString(), 512),
+            remoteIp,
+            userAgent,
 
-            companyCode
+            companyCode,
+
+            // Safe diagnostic data only.
+            forwardedFor = RedactHeaderValue(context.Request.Headers["X-Forwarded-For"].ToString()),
+            forwardedProto = RedactHeaderValue(context.Request.Headers["X-Forwarded-Proto"].ToString()),
+            forwardedHost = RedactHeaderValue(context.Request.Headers["X-Forwarded-Host"].ToString())
         };
 
         try
@@ -69,11 +79,11 @@ public sealed class SecurityDeniedAuditMiddleware
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
-            // Request was aborted by client/server. Do not fail the request pipeline.
+            // Normal request abort. Do not fail the pipeline.
         }
         catch (Exception ex)
         {
-            // Audit must be fail-safe and must not break the original request.
+            // Audit must be fail-safe.
             _logger.LogError(ex, "Failed to write SecurityDenied audit log.");
         }
     }
@@ -88,8 +98,6 @@ public sealed class SecurityDeniedAuditMiddleware
     {
         try
         {
-            // After app.UseForwardedHeaders(), RemoteIpAddress should already be the real client IP,
-            // but only if the request came from a trusted KnownProxy/KnownNetwork.
             var ip = context.Connection.RemoteIpAddress;
 
             if (ip is null)
@@ -113,7 +121,27 @@ public sealed class SecurityDeniedAuditMiddleware
 
         var value = queryString.Trim();
 
-        // Never store secrets/tokens/passwords in audit metadata.
+        if (ContainsSensitiveKey(value))
+            return "[REDACTED]";
+
+        return Truncate(value, 1024);
+    }
+
+    private static string RedactHeaderValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        value = value.Trim();
+
+        if (ContainsSensitiveKey(value))
+            return "[REDACTED]";
+
+        return Truncate(value, 512);
+    }
+
+    private static bool ContainsSensitiveKey(string value)
+    {
         var sensitiveKeys = new[]
         {
             "password",
@@ -123,17 +151,21 @@ public sealed class SecurityDeniedAuditMiddleware
             "access_token",
             "refresh_token",
             "authorization",
+            "bearer",
+            "cookie",
+            "set-cookie",
             "secret",
-            "key"
+            "client_secret",
+            "api_key",
+            "apikey",
+            "key",
+            "connectionstring",
+            "connection_string",
+            "jwt"
         };
 
-        foreach (var key in sensitiveKeys)
-        {
-            if (value.Contains(key, StringComparison.OrdinalIgnoreCase))
-                return "[REDACTED]";
-        }
-
-        return Truncate(value, 1024);
+        return sensitiveKeys.Any(key =>
+            value.Contains(key, StringComparison.OrdinalIgnoreCase));
     }
 
     private static string Truncate(string? value, int maxLen)
