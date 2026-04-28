@@ -16,8 +16,10 @@ using BonyadRazi.Portal.Infrastructure.Audit;
 using BonyadRazi.Portal.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using System.Net;
 using System.Security.Claims;
 using System.Text;
 
@@ -26,6 +28,74 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
+// --------------------
+// Forwarded Headers
+// --------------------
+// API is behind Gateway/YARP.
+// Trust only configured proxies so arbitrary clients cannot spoof X-Forwarded-For.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor |
+        ForwardedHeaders.XForwardedProto |
+        ForwardedHeaders.XForwardedHost;
+
+    options.KnownProxies.Clear();
+    options.KnownIPNetworks.Clear();
+
+    options.RequireHeaderSymmetry = builder.Configuration.GetValue(
+        "ForwardedHeaders:RequireHeaderSymmetry",
+        true);
+
+    options.ForwardLimit = builder.Configuration.GetValue(
+        "ForwardedHeaders:ForwardLimit",
+        1);
+
+    var proxies = builder.Configuration
+        .GetSection("ForwardedHeaders:KnownProxies")
+        .Get<string[]>() ?? Array.Empty<string>();
+
+    foreach (var proxy in proxies)
+    {
+        if (IPAddress.TryParse(proxy, out var ip))
+        {
+            if (ip.IsIPv4MappedToIPv6)
+                ip = ip.MapToIPv4();
+
+            options.KnownProxies.Add(ip);
+        }
+    }
+
+    var cidrs = builder.Configuration
+        .GetSection("ForwardedHeaders:KnownCidrs")
+        .Get<string[]>() ?? Array.Empty<string>();
+
+    foreach (var cidr in cidrs)
+    {
+        var parts = cidr.Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (parts.Length != 2)
+            continue;
+
+        if (!IPAddress.TryParse(parts[0], out var networkIp))
+            continue;
+
+        if (!int.TryParse(parts[1], out var prefixLength))
+            continue;
+
+        if (networkIp.IsIPv4MappedToIPv6)
+            networkIp = networkIp.MapToIPv4();
+
+        options.KnownIPNetworks.Add(
+            new System.Net.IPNetwork(networkIp, prefixLength));
+    }
+});
+
+// --------------------
+// JWT
+// --------------------
 var jwtKey = Environment.GetEnvironmentVariable("JWT_SIGNING_KEY");
 if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
     throw new InvalidOperationException("JWT_SIGNING_KEY is missing or too short (minimum 32 characters).");
@@ -37,16 +107,24 @@ var audience = builder.Configuration["Jwt:Audience"];
 if (string.IsNullOrWhiteSpace(issuer) || string.IsNullOrWhiteSpace(audience))
     throw new InvalidOperationException("Jwt:Issuer and Jwt:Audience must be provided in configuration.");
 
+// --------------------
+// Persistence
+// --------------------
 builder.Services.AddDbContext<RasfPortalDbContext>(opt =>
 {
     opt.UseSqlServer(builder.Configuration.GetConnectionString("RasfPorta"));
 });
 
+// --------------------
+// Authentication / Authorization
+// --------------------
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
     {
-        opt.RequireHttpsMetadata = !builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing");
+        opt.RequireHttpsMetadata =
+            !builder.Environment.IsDevelopment() &&
+            !builder.Environment.IsEnvironment("Testing");
 
         opt.MapInboundClaims = false;
 
@@ -85,6 +163,9 @@ builder.Services.AddAuthorization(options =>
     });
 });
 
+// --------------------
+// Background jobs / Services
+// --------------------
 builder.Services.Configure<AuthCleanupOptions>(builder.Configuration.GetSection("AuthCleanup"));
 builder.Services.AddHostedService<RefreshTokenCleanupHostedService>();
 
@@ -97,6 +178,11 @@ builder.Services.AddSingleton<Pbkdf2PasswordHasher>();
 
 var app = builder.Build();
 
+// IMPORTANT:
+// This must run before anything that reads RemoteIpAddress:
+// authentication, audit middleware, authorization, controllers.
+app.UseForwardedHeaders();
+
 if (app.Environment.IsDevelopment())
 {
     using var scope = app.Services.CreateScope();
@@ -106,7 +192,7 @@ if (app.Environment.IsDevelopment())
 
     try
     {
-        // Development-only: create a default administrator account if migrations have been applied
+        // Development-only: create a default administrator account if migrations have been applied.
         if (!await db.UserAccounts.AnyAsync(x => x.Username == "admin"))
         {
             var (hash, salt, it) = hasher.Hash("admin");
@@ -148,10 +234,15 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseAuthentication();
+
+// Must be after UseAuthentication so user/claims are available,
+// and before UseAuthorization so 401/403 responses are captured.
 app.UseMiddleware<SecurityDeniedAuditMiddleware>();
+
 app.UseAuthorization();
 
 app.MapControllers();
+
 app.Run();
 
 /// <summary>

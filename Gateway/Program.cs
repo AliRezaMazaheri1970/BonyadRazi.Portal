@@ -1,17 +1,17 @@
 using Gateway;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
+using System.Net;
 using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
-using Microsoft.AspNetCore.HttpOverrides;
-using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // --------------------
-// Config + YARP
+// Reverse Proxy (YARP)
 // --------------------
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
@@ -19,8 +19,8 @@ builder.Services.AddReverseProxy()
 // --------------------
 // Forwarded Headers
 // --------------------
-// Production-safe: trust only configured proxies/networks.
-// This prevents spoofed X-Forwarded-For from arbitrary clients.
+// Gateway is behind HAProxy.
+// Trust only configured proxies/networks so clients cannot spoof X-Forwarded-* headers.
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders =
@@ -31,17 +31,13 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownProxies.Clear();
     options.KnownIPNetworks.Clear();
 
-    var requireSymmetry = builder.Configuration.GetValue(
+    options.RequireHeaderSymmetry = builder.Configuration.GetValue(
         "ForwardedHeaders:RequireHeaderSymmetry",
         true);
 
-    options.RequireHeaderSymmetry = requireSymmetry;
-
-    var forwardLimit = builder.Configuration.GetValue(
+    options.ForwardLimit = builder.Configuration.GetValue(
         "ForwardedHeaders:ForwardLimit",
         1);
-
-    options.ForwardLimit = forwardLimit;
 
     var proxies = builder.Configuration
         .GetSection("ForwardedHeaders:KnownProxies")
@@ -50,7 +46,12 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     foreach (var proxy in proxies)
     {
         if (IPAddress.TryParse(proxy, out var ip))
+        {
+            if (ip.IsIPv4MappedToIPv6)
+                ip = ip.MapToIPv4();
+
             options.KnownProxies.Add(ip);
+        }
     }
 
     var cidrs = builder.Configuration
@@ -71,6 +72,9 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
         if (!int.TryParse(parts[1], out var prefixLength))
             continue;
+
+        if (networkIp.IsIPv4MappedToIPv6)
+            networkIp = networkIp.MapToIPv4();
 
         options.KnownIPNetworks.Add(
             new System.Net.IPNetwork(networkIp, prefixLength));
@@ -126,9 +130,9 @@ builder.Services.AddAuthorization();
 // --------------------
 // Rate Limiting
 // --------------------
-// - /api/auth/login             => 10/min/IP
-// - /api/auth/refresh|revoke    => 30/min/IP
-// - other /api/*                => 120/min/IP
+// - /api/auth/login          => 10/min/IP
+// - /api/auth/refresh|revoke => 30/min/IP
+// - other /api/*             => 120/min/IP
 builder.Services.AddRateLimiter(opt =>
 {
     opt.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -213,7 +217,48 @@ builder.Services.AddRateLimiter(opt =>
 });
 
 var app = builder.Build();
+
+// IMPORTANT:
+// This must run before anything that reads RemoteIpAddress.
+// After this middleware, ctx.Connection.RemoteIpAddress becomes the trusted client IP
+// if the request came from a configured KnownProxy/KnownNetwork.
 app.UseForwardedHeaders();
+
+// --------------------
+// Forward real client IP from Gateway/YARP to downstream API
+// --------------------
+// Gateway connects to API over 127.0.0.1, so API would otherwise see only 127.0.0.1.
+// After UseForwardedHeaders(), RemoteIpAddress is already the trusted client IP.
+// We rewrite X-Forwarded-* before YARP proxies to API.
+app.Use(async (ctx, next) =>
+{
+    var path = ctx.Request.Path;
+
+    var shouldForwardClientHeaders =
+        path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/health", StringComparison.OrdinalIgnoreCase);
+
+    if (shouldForwardClientHeaders)
+    {
+        var ip = ctx.Connection.RemoteIpAddress;
+
+        if (ip is not null)
+        {
+            if (ip.IsIPv4MappedToIPv6)
+                ip = ip.MapToIPv4();
+
+            var clientIp = ip.ToString();
+
+            ctx.Request.Headers["X-Forwarded-For"] = clientIp;
+            ctx.Request.Headers["X-Real-IP"] = clientIp;
+        }
+
+        ctx.Request.Headers["X-Forwarded-Proto"] = ctx.Request.Scheme;
+        ctx.Request.Headers["X-Forwarded-Host"] = ctx.Request.Host.Value;
+    }
+
+    await next();
+});
 
 // --------------------
 // Public Gateway Health
@@ -250,7 +295,7 @@ app.Use(async (ctx, next) =>
     var path = ctx.Request.Path;
 
     // Apply API allowlist only to API/service paths.
-    // Do not block WebApp catch-all route "/{**catch-all}".
+    // Do not block future WebApp/static routes here.
     var shouldCheckApiAllowlist =
         path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase) ||
         path.Equals("/health", StringComparison.OrdinalIgnoreCase);
