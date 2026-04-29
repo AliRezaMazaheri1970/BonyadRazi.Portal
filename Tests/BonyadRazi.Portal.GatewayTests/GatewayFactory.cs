@@ -28,12 +28,14 @@ public sealed class GatewayFactory : WebApplicationFactory<GatewayEntryPoint>
             ["Jwt:Audience"] = "BonyadRazi.Portal",
 
             // Deterministic allow prefixes for tests.
+            // Deterministic allow prefixes for tests.
             ["Security:ApiAllowPrefixes:0"] = "/api/auth",
             ["Security:ApiAllowPrefixes:1"] = "/api/users",
             ["Security:ApiAllowPrefixes:2"] = "/api/companies",
             ["Security:ApiAllowPrefixes:3"] = "/api/audit",
-            ["Security:ApiAllowPrefixes:4"] = "/health",
-            ["Security:ApiAllowPrefixes:5"] = "/gateway/health"
+            ["Security:ApiAllowPrefixes:4"] = "/api/diagnostics",
+            ["Security:ApiAllowPrefixes:5"] = "/health",
+            ["Security:ApiAllowPrefixes:6"] = "/gateway/health",
         };
 
         if (overrides is not null)
