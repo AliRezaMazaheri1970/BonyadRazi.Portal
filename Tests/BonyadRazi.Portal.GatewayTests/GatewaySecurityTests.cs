@@ -131,4 +131,66 @@ public class GatewaySecurityTests
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Gateway_Diagnostics_WithoutJwt_Returns401()
+    {
+        await using var factory = new GatewayFactory(new()
+        {
+            ["Security:AllowedCidrs:0"] = null,
+            ["Security:ValidateJwtAtGateway"] = "true",
+            ["Jwt:Issuer"] = "BonyadRazi.Auth",
+            ["Jwt:Audience"] = "BonyadRazi.Portal",
+
+            ["Security:ApiAllowPrefixes:0"] = "/api/auth",
+            ["Security:ApiAllowPrefixes:1"] = "/api/users",
+            ["Security:ApiAllowPrefixes:2"] = "/api/companies",
+            ["Security:ApiAllowPrefixes:3"] = "/api/audit",
+            ["Security:ApiAllowPrefixes:4"] = "/api/diagnostics",
+            ["Security:ApiAllowPrefixes:5"] = "/health",
+            ["Security:ApiAllowPrefixes:6"] = "/gateway/health"
+        });
+
+        var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/api/diagnostics/auth-test");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Gateway_Diagnostics_WithValidJwt_Returns200()
+    {
+        await using var factory = new GatewayFactory(new()
+        {
+            ["Security:AllowedCidrs:0"] = null,
+            ["Security:ValidateJwtAtGateway"] = "true",
+            ["Jwt:Issuer"] = "BonyadRazi.Auth",
+            ["Jwt:Audience"] = "BonyadRazi.Portal",
+
+            ["Security:ApiAllowPrefixes:0"] = "/api/auth",
+            ["Security:ApiAllowPrefixes:1"] = "/api/users",
+            ["Security:ApiAllowPrefixes:2"] = "/api/companies",
+            ["Security:ApiAllowPrefixes:3"] = "/api/audit",
+            ["Security:ApiAllowPrefixes:4"] = "/api/diagnostics",
+            ["Security:ApiAllowPrefixes:5"] = "/health",
+            ["Security:ApiAllowPrefixes:6"] = "/gateway/health"
+        });
+
+        var client = factory.CreateClient();
+
+        var token = JwtTestToken.Create(
+            userId: Guid.NewGuid(),
+            companyCode: Guid.NewGuid(),
+            roles: new[] { "User" },
+            issuer: "BonyadRazi.Auth",
+            audience: "BonyadRazi.Portal");
+
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+
+        var response = await client.GetAsync("/api/diagnostics/auth-test");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
 }

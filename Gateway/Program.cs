@@ -404,6 +404,15 @@ if (useTestingEndpoints)
             path = ctx.Request.Path.Value
         }));
 
+    app.MapGet("/api/diagnostics/auth-test", (HttpContext ctx) =>
+        Results.Ok(new
+        {
+            ok = true,
+            route = "diagnostics-auth-test",
+            user = ctx.User.Identity?.Name,
+            path = ctx.Request.Path.Value
+        }));
+
     app.MapPost("/api/auth/login", () =>
         Results.Ok(new { ok = true, route = "login" }));
 
