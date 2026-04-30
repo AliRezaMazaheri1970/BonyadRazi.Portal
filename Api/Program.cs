@@ -158,13 +158,6 @@ builder.Services.AddAuthorization(options =>
         .Build();
 
     PortalPolicies.AddPortalPolicies(options);
-
-    options.AddPolicy(PortalPolicies.CompaniesRead, policy =>
-    {
-        policy.RequireAuthenticatedUser();
-        policy.RequireClaim(PortalClaims.CompanyCode);
-        policy.RequireRole("Admin", "SuperAdmin");
-    });
 });
 
 // --------------------
