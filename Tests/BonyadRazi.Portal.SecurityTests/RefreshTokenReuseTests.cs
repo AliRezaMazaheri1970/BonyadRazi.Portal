@@ -1,4 +1,5 @@
-﻿using BonyadRazi.Portal.Infrastructure.Audit.Entities;
+﻿using BonyadRazi.Portal.Api.Audit;
+using BonyadRazi.Portal.Infrastructure.Audit.Entities;
 using BonyadRazi.Portal.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -83,6 +84,64 @@ public sealed class RefreshTokenReuseTests : IClassFixture<ApiFactory>
             .CountAsync();
 
         Assert.True(reuseDetectedCount >= 1);
+    }
+
+    [Fact]
+    public async Task Refresh_ReusingRotatedRefreshToken_ShouldWriteAuditLog()
+    {
+        var client = _factory.CreateClient();
+
+        var userId = Guid.NewGuid();
+        var companyCode = Guid.NewGuid();
+        var username = $"reuse-audit-{Guid.NewGuid():N}";
+        const string password = "P@ssw0rd!";
+
+        await SeedUser(userId, companyCode, username, password);
+
+        var loginResponse = await client.PostAsJsonAsync("/api/auth/login", new
+        {
+            Username = username,
+            Password = password
+        });
+
+        Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
+
+        var loginTokens = await loginResponse.Content.ReadFromJsonAsync<TokenResponse>();
+        Assert.NotNull(loginTokens);
+        Assert.False(string.IsNullOrWhiteSpace(loginTokens!.refresh_token));
+
+        var firstRefreshToken = loginTokens.refresh_token;
+
+        var firstRefreshResponse = await client.PostAsJsonAsync("/api/auth/refresh", new
+        {
+            refresh_token = firstRefreshToken
+        });
+
+        Assert.Equal(HttpStatusCode.OK, firstRefreshResponse.StatusCode);
+
+        var reuseResponse = await client.PostAsJsonAsync("/api/auth/refresh", new
+        {
+            refresh_token = firstRefreshToken
+        });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, reuseResponse.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RasfPortalDbContext>();
+
+        var auditLog = await db.UserActionLogs
+            .OrderByDescending(x => x.Utc)
+            .FirstOrDefaultAsync(x =>
+                x.ActionType == AuditActionTypes.AuthRefreshReuseDetected &&
+                x.StatusCode == 401 &&
+                x.Path == "/api/auth/refresh" &&
+                x.Reason == "REFRESH_TOKEN_REUSE_DETECTED");
+
+        Assert.NotNull(auditLog);
+        Assert.Equal(userId, auditLog!.UserId);
+        Assert.Equal("POST", auditLog.Method);
+        Assert.False(string.IsNullOrWhiteSpace(auditLog.TraceId));
+        Assert.False(string.IsNullOrWhiteSpace(auditLog.RemoteIp));
     }
 
     private async Task SeedUser(

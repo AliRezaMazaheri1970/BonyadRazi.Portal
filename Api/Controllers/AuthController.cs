@@ -180,14 +180,40 @@ public sealed class AuthController : ControllerBase
         // Refresh Token Reuse Detection:
         // اگر refresh token قبلاً revoke/rotate شده و دوباره ارائه شود،
         // این نشانه replay یا سرقت احتمالی token است.
-        // در این حالت تمام refresh tokenهای فعال همان کاربر revoke می‌شوند.
+        // در این حالت تمام refresh tokenهای فعال همان کاربر revoke می‌شوند
+        // و رخداد امنیتی هم Audit می‌شود.
         if (oldToken.RevokedUtc.HasValue)
         {
-            await RevokeActiveRefreshTokensForUser(
+            var revokedActiveCount = await RevokeActiveRefreshTokensForUser(
                 oldToken.UserAccountId,
                 now,
                 "reuse_detected",
                 HttpContext.RequestAborted);
+
+            await _userActionLogService.LogAsync(
+                userId: oldToken.UserAccountId,
+                actionType: AuditActionTypes.AuthRefreshReuseDetected,
+                metadata: new
+                {
+                    utc = now,
+                    statusCode = StatusCodes.Status401Unauthorized,
+                    reason = "REFRESH_TOKEN_REUSE_DETECTED",
+
+                    method = Request.Method,
+                    path = Request.Path.ToString(),
+                    queryString = string.Empty,
+
+                    traceId = HttpContext.TraceIdentifier,
+
+                    remoteIp = ResolveClientIp(HttpContext),
+                    userAgent = Truncate(Request.Headers.UserAgent.ToString(), 512),
+
+                    refreshTokenId = oldToken.Id,
+                    replacedByTokenId = oldToken.ReplacedByTokenId,
+                    revokeReason = "reuse_detected",
+                    revokedActiveCount
+                },
+                cancellationToken: HttpContext.RequestAborted);
 
             return Unauthorized(new { message = "invalid_refresh" });
         }

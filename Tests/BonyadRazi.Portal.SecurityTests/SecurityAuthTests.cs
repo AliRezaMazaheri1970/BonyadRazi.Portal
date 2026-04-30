@@ -1,3 +1,6 @@
+using BonyadRazi.Portal.Api.Audit;
+using BonyadRazi.Portal.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net;
@@ -50,6 +53,50 @@ public sealed class SecurityAuthTests : IClassFixture<ApiFactory>
         var resp = await client.GetAsync($"/api/companies/{routeTenant}");
 
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Companies_Get_CrossTenant_ShouldWriteTenantViolationAuditLog()
+    {
+        var client = _factory.CreateClient();
+
+        var cfg = _factory.Services.GetRequiredService<IConfiguration>();
+        var issuer = cfg["Jwt:Issuer"]!;
+        var audience = cfg["Jwt:Audience"]!;
+
+        var userId = Guid.NewGuid();
+        var tokenTenant = Guid.NewGuid();
+        var routeTenant = Guid.NewGuid();
+
+        var token = JwtTestToken.Create(
+            userId: userId,
+            companyCode: tokenTenant,
+            roles: new[] { "Admin" },
+            issuer: issuer,
+            audience: audience);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var resp = await client.GetAsync($"/api/companies/{routeTenant}");
+
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RasfPortalDbContext>();
+
+        var auditLog = await db.UserActionLogs
+            .OrderByDescending(x => x.Utc)
+            .FirstOrDefaultAsync(x =>
+                x.ActionType == AuditActionTypes.SecurityTenantViolation &&
+                x.StatusCode == 403 &&
+                x.Path == $"/api/companies/{routeTenant}" &&
+                x.Reason == "TENANT_MISMATCH");
+
+        Assert.NotNull(auditLog);
+        Assert.Equal(userId, auditLog!.UserId);
+        Assert.Equal("GET", auditLog.Method);
+        Assert.False(string.IsNullOrWhiteSpace(auditLog.TraceId));
+        Assert.False(string.IsNullOrWhiteSpace(auditLog.RemoteIp));
     }
 
     [Fact]
