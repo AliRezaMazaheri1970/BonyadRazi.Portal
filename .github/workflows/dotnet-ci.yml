@@ -1,0 +1,55 @@
+name: dotnet-ci
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+  push:
+    branches:
+      - main
+      - master
+      - develop
+
+concurrency:
+  group: dotnet-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      ASPNETCORE_ENVIRONMENT: Testing
+      BONYADRAZI_DEV_SEED_ALLOW: "true"
+      BONYADRAZI_DEV_SEED_PASSWORD: "ChangeMe_For_CI_Only_123!"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore ./BonyadRazi.Portal.slnx
+
+      - name: Build
+        run: dotnet build ./BonyadRazi.Portal.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test ./BonyadRazi.Portal.slnx --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: "**/TestResults/*.trx"

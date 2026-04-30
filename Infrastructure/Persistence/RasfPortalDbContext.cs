@@ -48,6 +48,10 @@ public sealed class RasfPortalDbContext : DbContext
             e.HasIndex(x => x.CompanyCode);
             e.HasIndex(x => x.ActionType);
             e.HasIndex(x => x.StatusCode);
+
+            e.HasIndex(x => new { x.ActionType, x.CompanyCode, x.Utc });
+            e.HasIndex(x => new { x.CompanyCode, x.Utc });
+            e.HasIndex(x => new { x.StatusCode, x.Utc });
         });
 
         modelBuilder.Entity<UserAccount>(e =>
