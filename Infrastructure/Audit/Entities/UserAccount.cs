@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel.DataAnnotations;
 
-namespace BonyadRazi.Portal.Infrastructure.Auth.Entities;
+namespace BonyadRazi.Portal.Infrastructure.Audit.Entities;
 
 public sealed class UserAccount
 {

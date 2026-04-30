@@ -1,6 +1,5 @@
 ﻿using BonyadRazi.Portal.Api.Security;
 using BonyadRazi.Portal.Infrastructure.Audit.Entities;
-using BonyadRazi.Portal.Infrastructure.Auth.Entities;
 using BonyadRazi.Portal.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -84,11 +83,11 @@ public sealed class AuthController : ControllerBase
         user.FailedLoginCount = 0;
         user.LockoutEndUtc = null;
 
-        // ✅ RoadMap: 15 minutes
+        // RoadMap: 15 minutes
         var accessMinutes = _cfg.GetValue("Jwt:AccessTokenMinutes", 15);
         var accessToken = IssueJwt(user, accessMinutes);
 
-        // ✅ Refresh token واقعی
+        // Refresh token واقعی
         var refreshDays = _cfg.GetValue("Jwt:RefreshTokenDays", 30);
 
         var refreshRaw = GenerateRefreshTokenRaw();
@@ -132,7 +131,22 @@ public sealed class AuthController : ControllerBase
         if (oldToken is null)
             return Unauthorized(new { message = "invalid_refresh" });
 
-        if (!IsRefreshActive(oldToken, now))
+        // Refresh Token Reuse Detection:
+        // اگر refresh token قبلاً revoke/rotate شده و دوباره ارائه شود،
+        // این نشانه replay یا سرقت احتمالی token است.
+        // در این حالت تمام refresh tokenهای فعال همان کاربر revoke می‌شوند.
+        if (oldToken.RevokedUtc.HasValue)
+        {
+            await RevokeActiveRefreshTokensForUser(
+                oldToken.UserAccountId,
+                now,
+                "reuse_detected",
+                HttpContext.RequestAborted);
+
+            return Unauthorized(new { message = "invalid_refresh" });
+        }
+
+        if (oldToken.ExpiresUtc <= now)
             return Unauthorized(new { message = "refresh_not_active" });
 
         var user = await _db.UserAccounts.SingleOrDefaultAsync(x => x.Id == oldToken.UserAccountId);
@@ -199,6 +213,33 @@ public sealed class AuthController : ControllerBase
         }
 
         return Ok(new { ok = true });
+    }
+
+    private async Task<int> RevokeActiveRefreshTokensForUser(
+        Guid userAccountId,
+        DateTime now,
+        string reason,
+        CancellationToken ct)
+    {
+        var activeTokens = await _db.RefreshTokens
+            .Where(x =>
+                x.UserAccountId == userAccountId &&
+                x.RevokedUtc == null &&
+                x.ExpiresUtc > now)
+            .ToListAsync(ct);
+
+        if (activeTokens.Count == 0)
+        {
+            return 0;
+        }
+
+        foreach (var token in activeTokens)
+        {
+            token.RevokedUtc = now;
+            token.RevokeReason = reason;
+        }
+
+        return await _db.SaveChangesAsync(ct);
     }
 
     private static bool IsRefreshActive(RefreshToken t, DateTime utcNow)
