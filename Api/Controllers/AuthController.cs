@@ -19,16 +19,22 @@ public sealed class AuthController : ControllerBase
     private readonly RasfPortalDbContext _db;
     private readonly IConfiguration _cfg;
     private readonly Pbkdf2PasswordHasher _hasher;
+    private readonly IUsernameLoginRateLimiter _usernameLoginRateLimiter;
 
     // Lockout policy (Dev)
     private const int MaxFailedAttempts = 5;
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(5);
 
-    public AuthController(RasfPortalDbContext db, IConfiguration cfg, Pbkdf2PasswordHasher hasher)
+    public AuthController(
+        RasfPortalDbContext db,
+        IConfiguration cfg,
+        Pbkdf2PasswordHasher hasher,
+        IUsernameLoginRateLimiter usernameLoginRateLimiter)
     {
         _db = db;
         _cfg = cfg;
         _hasher = hasher;
+        _usernameLoginRateLimiter = usernameLoginRateLimiter;
     }
 
     public sealed record LoginRequest(string Username, string Password);
@@ -51,13 +57,24 @@ public sealed class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(req.Password))
             return Unauthorized(new { message = "Invalid credentials." });
 
+        var now = DateTime.UtcNow;
+
+        var usernameLimit = _usernameLoginRateLimiter.Check(username, now);
+        if (!usernameLimit.Allowed)
+        {
+            Response.Headers.RetryAfter = usernameLimit.RetryAfterSeconds.ToString();
+
+            return StatusCode(StatusCodes.Status429TooManyRequests, new
+            {
+                message = "Too many login attempts. Try later."
+            });
+        }
+
         var user = await _db.UserAccounts.SingleOrDefaultAsync(x => x.Username == username);
 
         // جلوگیری از user-enumeration
         if (user is null || !user.IsActive)
             return Unauthorized(new { message = "Invalid credentials." });
-
-        var now = DateTime.UtcNow;
 
         // Lockout check
         if (user.LockoutEndUtc is not null && user.LockoutEndUtc.Value > now)

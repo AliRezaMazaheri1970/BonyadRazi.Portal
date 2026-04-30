@@ -166,6 +166,11 @@ builder.Services.AddAuthorization(options =>
 builder.Services.Configure<AuthCleanupOptions>(builder.Configuration.GetSection("AuthCleanup"));
 builder.Services.AddHostedService<RefreshTokenCleanupHostedService>();
 
+builder.Services.Configure<UsernameLoginRateLimitOptions>(
+    builder.Configuration.GetSection("Security:UsernameLoginRateLimit"));
+
+builder.Services.AddSingleton<IUsernameLoginRateLimiter, InMemoryUsernameLoginRateLimiter>();
+
 if (builder.Environment.IsEnvironment("Testing"))
     builder.Services.AddSingleton<IUserActionLogService, NoOpUserActionLogService>();
 else
