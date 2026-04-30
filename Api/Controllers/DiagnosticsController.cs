@@ -38,18 +38,21 @@ public sealed class DiagnosticsController : ControllerBase
 
     [HttpGet("tenant-test/{companyCode:guid}")]
     [Authorize]
+    [RequireTenantMatch]
     public IActionResult TenantTest(Guid companyCode)
     {
+        // Defense-in-depth:
+        // TenantConsistencyFilter قبل از ورود به action، companyCode را با claim کاربر چک می‌کند.
+        // این چک inline فعلاً باقی می‌ماند تا رفتار امنیتی قبلی و تست‌های فعلی حفظ شوند.
+
         if (!User.TryGetCompanyCode(out var claimCompanyCode))
         {
             return Forbid();
         }
 
-        var isSystemAdmin =
-            User.IsInRole("Admin") ||
-            User.IsInRole("SuperAdmin");
-
-        if (claimCompanyCode != companyCode && !isSystemAdmin)
+        // این endpoint مخصوص تست strict tenant isolation است.
+        // یعنی route companyCode باید دقیقاً با claim شرکت یکی باشد.
+        if (claimCompanyCode != companyCode)
         {
             return Forbid();
         }
@@ -61,6 +64,7 @@ public sealed class DiagnosticsController : ControllerBase
             check = "tenant",
             routeCompanyCode = companyCode,
             claimCompanyCode,
+            tenantMatched = true,
             utc = DateTime.UtcNow
         });
     }

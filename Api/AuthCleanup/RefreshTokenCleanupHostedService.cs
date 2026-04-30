@@ -64,18 +64,26 @@ public sealed class RefreshTokenCleanupHostedService : BackgroundService
 
         if (currentOptions.DeleteExpired)
         {
-            deletedExpired = await db.RefreshTokens
-                .Where(x => x.ExpiresUtc <= now)
-                .ExecuteDeleteAsync(cancellationToken);
+            var expiredQuery = db.RefreshTokens
+                .Where(x => x.ExpiresUtc <= now);
+
+            deletedExpired = await DeleteRefreshTokensAsync(
+                db,
+                expiredQuery,
+                cancellationToken);
         }
 
         if (currentOptions.DeleteRevokedOlderThanDays > 0)
         {
             var cutoff = now.AddDays(-currentOptions.DeleteRevokedOlderThanDays);
 
-            deletedOldRevoked = await db.RefreshTokens
-                .Where(x => x.RevokedUtc != null && x.RevokedUtc <= cutoff)
-                .ExecuteDeleteAsync(cancellationToken);
+            var oldRevokedQuery = db.RefreshTokens
+                .Where(x => x.RevokedUtc != null && x.RevokedUtc <= cutoff);
+
+            deletedOldRevoked = await DeleteRefreshTokensAsync(
+                db,
+                oldRevokedQuery,
+                cancellationToken);
         }
 
         if (deletedExpired > 0 || deletedOldRevoked > 0)
@@ -86,5 +94,29 @@ public sealed class RefreshTokenCleanupHostedService : BackgroundService
                 deletedOldRevoked,
                 now);
         }
+    }
+
+    private static async Task<int> DeleteRefreshTokensAsync<T>(
+        RasfPortalDbContext db,
+        IQueryable<T> query,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        var providerName = db.Database.ProviderName ?? string.Empty;
+
+        if (providerName.Contains("InMemory", StringComparison.OrdinalIgnoreCase))
+        {
+            var entities = await query.ToListAsync(cancellationToken);
+
+            if (entities.Count == 0)
+            {
+                return 0;
+            }
+
+            db.RemoveRange(entities);
+            return await db.SaveChangesAsync(cancellationToken);
+        }
+
+        return await query.ExecuteDeleteAsync(cancellationToken);
     }
 }

@@ -1,4 +1,6 @@
 ﻿using BonyadRazi.Portal.SecurityTests;
+using Gateway;
+using Microsoft.AspNetCore.Http;
 using System.Net;
 using System.Net.Http.Headers;
 using Xunit;
@@ -192,5 +194,18 @@ public class GatewaySecurityTests
         var response = await client.GetAsync("/api/diagnostics/auth-test");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public void Gateway_GetClientIp_IgnoresSpoofedXForwardedForHeader()
+    {
+        var context = new DefaultHttpContext();
+
+        context.Connection.RemoteIpAddress = IPAddress.Parse("10.10.10.10");
+        context.Request.Headers["X-Forwarded-For"] = "192.168.93.5";
+
+        var ip = GatewaySecurityHelper.GetClientIp(context);
+
+        Assert.Equal(IPAddress.Parse("10.10.10.10"), ip);
     }
 }

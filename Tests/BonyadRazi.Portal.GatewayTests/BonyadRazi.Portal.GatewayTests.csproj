@@ -29,6 +29,7 @@
 
 	<ItemGroup>
 		<!-- ✅ THIS WAS MISSING -->
+		<ProjectReference Include="..\..\Api\Api.csproj" />
 		<ProjectReference Include="..\..\Gateway\Gateway.csproj" />
 	</ItemGroup>
 
@@ -43,11 +44,7 @@
 			<_TestHostDeps Include="$(IntermediateOutputPath)testhost.deps.json" />
 		</ItemGroup>
 
-		<Copy
-		  SourceFiles="@(_TestHostDeps)"
-		  DestinationFolder="$(OutputPath)"
-		  SkipUnchangedFiles="true"
-		  Condition="Exists('@(_TestHostDeps)')" />
+		<Copy SourceFiles="@(_TestHostDeps)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="Exists('@(_TestHostDeps)')" />
 	</Target>
 
 </Project>
