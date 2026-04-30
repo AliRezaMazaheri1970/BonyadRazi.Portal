@@ -7,22 +7,8 @@ public static class GatewaySecurityHelper
 {
     public static IPAddress? GetClientIp(HttpContext ctx)
     {
-        if (ctx.Request.Headers.TryGetValue("X-Forwarded-For", out var forwarded))
-        {
-            var first = forwarded.ToString()
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .FirstOrDefault();
-
-            if (IPAddress.TryParse(first, out var parsed))
-            {
-                if (parsed.IsIPv4MappedToIPv6)
-                    parsed = parsed.MapToIPv4();
-
-                return parsed;
-            }
-        }
-
         var ip = ctx.Connection.RemoteIpAddress;
+
         if (ip is null)
             return null;
 

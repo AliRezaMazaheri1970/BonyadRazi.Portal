@@ -1,6 +1,4 @@
-﻿using System.Net;
-using System.Security.Claims;
-using Microsoft.AspNetCore.Http;
+﻿using System.Security.Claims;
 
 namespace BonyadRazi.Portal.Api.Audit;
 
@@ -42,19 +40,14 @@ public static class RequestAuditMetadataFactory
 
     public static string ResolveClientIp(HttpContext context)
     {
-        if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var forwarded))
-        {
-            var first = forwarded.ToString()
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .FirstOrDefault();
-
-            if (!string.IsNullOrWhiteSpace(first) && IPAddress.TryParse(first, out _))
-                return first;
-        }
-
         var ip = context.Connection.RemoteIpAddress;
-        if (ip is null) return "unknown";
-        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+
+        if (ip is null)
+            return "unknown";
+
+        if (ip.IsIPv4MappedToIPv6)
+            ip = ip.MapToIPv4();
+
         return ip.ToString();
     }
 }
