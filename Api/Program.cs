@@ -13,6 +13,7 @@ using BonyadRazi.Portal.Api.Middleware;
 using BonyadRazi.Portal.Api.Security;
 using BonyadRazi.Portal.Application.Abstractions;
 using BonyadRazi.Portal.Infrastructure.Audit;
+using BonyadRazi.Portal.Infrastructure.Audit.Entities;
 using BonyadRazi.Portal.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -187,36 +188,67 @@ app.UseForwardedHeaders();
 
 if (app.Environment.IsDevelopment())
 {
-    using var scope = app.Services.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<RasfPortalDbContext>();
-    var hasher = scope.ServiceProvider.GetRequiredService<Pbkdf2PasswordHasher>();
-    var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("DevSeed");
+    var logger = app.Services
+        .GetRequiredService<ILoggerFactory>()
+        .CreateLogger("DevSeed");
 
-    try
+    var devSeedAllowed = string.Equals(
+        Environment.GetEnvironmentVariable("BONYADRAZI_DEV_SEED_ALLOW"),
+        "true",
+        StringComparison.OrdinalIgnoreCase);
+
+    if (!devSeedAllowed)
     {
-        // Development-only: create a default administrator account if migrations have been applied.
-        if (!await db.UserAccounts.AnyAsync(x => x.Username == "admin"))
-        {
-            var (hash, salt, it) = hasher.Hash("admin");
-
-            db.UserAccounts.Add(new BonyadRazi.Portal.Infrastructure.Audit.Entities.UserAccount
-            {
-                Username = "admin",
-                PasswordHash = hash,
-                PasswordSalt = salt,
-                PasswordIterations = it,
-                Roles = "Admin",
-                CompanyCode = Guid.Parse("22222222-2222-2222-2222-222222222222"),
-                IsActive = true
-            });
-
-            await db.SaveChangesAsync();
-            logger.LogInformation("DevSeed: admin user created.");
-        }
+        logger.LogInformation(
+            "DevSeed skipped. Set BONYADRAZI_DEV_SEED_ALLOW=true to enable development seeding.");
     }
-    catch (Exception ex)
+    else
     {
-        logger.LogWarning(ex, "DevSeed skipped (likely migrations not applied yet).");
+        var devSeedPassword =
+            Environment.GetEnvironmentVariable("BONYADRAZI_DEV_SEED_PASSWORD");
+
+        if (string.IsNullOrWhiteSpace(devSeedPassword) || devSeedPassword.Length < 12)
+        {
+            logger.LogWarning(
+                "DevSeed skipped. BONYADRAZI_DEV_SEED_PASSWORD must be set and must be at least 12 characters.");
+        }
+        else
+        {
+            using var scope = app.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<RasfPortalDbContext>();
+            var hasher = scope.ServiceProvider.GetRequiredService<Pbkdf2PasswordHasher>();
+
+            try
+            {
+                // Development-only: create a default administrator account if explicitly enabled.
+                if (!await db.UserAccounts.AnyAsync(x => x.Username == "admin"))
+                {
+                    var (hash, salt, it) = hasher.Hash(devSeedPassword);
+
+                    db.UserAccounts.Add(new UserAccount
+                    {
+                        Username = "admin",
+                        PasswordHash = hash,
+                        PasswordSalt = salt,
+                        PasswordIterations = it,
+                        Roles = "Admin",
+                        CompanyCode = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                        IsActive = true
+                    });
+
+                    await db.SaveChangesAsync();
+                    logger.LogInformation("DevSeed: admin user created.");
+                }
+                else
+                {
+                    logger.LogInformation("DevSeed skipped. Admin user already exists.");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "DevSeed skipped (likely migrations not applied yet).");
+            }
+        }
     }
 }
 
