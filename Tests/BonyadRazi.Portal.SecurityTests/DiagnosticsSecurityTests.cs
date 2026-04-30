@@ -16,16 +16,6 @@ public sealed class DiagnosticsSecurityTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Health_ShouldReturn200()
-    {
-        var client = _factory.CreateClient();
-
-        var resp = await client.GetAsync("/health");
-
-        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-    }
-
-    [Fact]
     public async Task Diagnostics_AuthTest_WithoutToken_ShouldReturn401()
     {
         var client = _factory.CreateClient();
@@ -110,5 +100,15 @@ public sealed class DiagnosticsSecurityTests : IClassFixture<ApiFactory>
         var resp = await client.GetAsync($"/api/diagnostics/tenant-test/{routeTenant}");
 
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Health_WithoutToken_ShouldReturn401()
+    {
+        var client = _factory.CreateClient();
+
+        var resp = await client.GetAsync("/health");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
 }

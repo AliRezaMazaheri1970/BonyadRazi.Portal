@@ -98,6 +98,7 @@ public static class PortalPolicies
             policy.RequireAuthenticatedUser();
             policy.RequireRole(
                 "Auditor",
+                "GlobalAuditor",
                 "Admin",
                 "SuperAdmin");
         });

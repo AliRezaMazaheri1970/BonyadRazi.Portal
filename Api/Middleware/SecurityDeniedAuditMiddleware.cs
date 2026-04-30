@@ -1,8 +1,6 @@
-using System.Security.Claims;
-using BonyadRazi.Portal.Application.Abstractions;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Logging;
 using BonyadRazi.Portal.Api.Audit;
+using BonyadRazi.Portal.Application.Abstractions;
+using System.Security.Claims;
 
 namespace BonyadRazi.Portal.Api.Middleware;
 
@@ -25,12 +23,16 @@ public sealed class SecurityDeniedAuditMiddleware
 
         // Avoid recursive auditing of audit endpoints.
         if (context.Request.Path.StartsWithSegments("/api/audit"))
+        {
             return;
+        }
 
         var status = context.Response.StatusCode;
 
         if (status is not (StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden))
+        {
             return;
+        }
 
         Guid? actorUserId =
             TryGetGuidClaim(context.User, "sub") ??
@@ -102,10 +104,14 @@ public sealed class SecurityDeniedAuditMiddleware
             var ip = context.Connection.RemoteIpAddress;
 
             if (ip is null)
+            {
                 return "unknown";
+            }
 
             if (ip.IsIPv4MappedToIPv6)
+            {
                 ip = ip.MapToIPv4();
+            }
 
             return ip.ToString();
         }
@@ -117,62 +123,20 @@ public sealed class SecurityDeniedAuditMiddleware
 
     private static string RedactQueryString(string? queryString)
     {
-        if (string.IsNullOrWhiteSpace(queryString))
-            return string.Empty;
-
-        var value = queryString.Trim();
-
-        if (ContainsSensitiveKey(value))
-            return "[REDACTED]";
-
-        return Truncate(value, 1024);
+        return AuditRedaction.RedactTextIfContainsSensitiveKey(queryString, 1024);
     }
 
     private static string RedactHeaderValue(string? value)
     {
-        if (string.IsNullOrWhiteSpace(value))
-            return string.Empty;
-
-        value = value.Trim();
-
-        if (ContainsSensitiveKey(value))
-            return "[REDACTED]";
-
-        return Truncate(value, 512);
-    }
-
-    private static bool ContainsSensitiveKey(string value)
-    {
-        var sensitiveKeys = new[]
-        {
-            "password",
-            "pass",
-            "pwd",
-            "token",
-            "access_token",
-            "refresh_token",
-            "authorization",
-            "bearer",
-            "cookie",
-            "set-cookie",
-            "secret",
-            "client_secret",
-            "api_key",
-            "apikey",
-            "key",
-            "connectionstring",
-            "connection_string",
-            "jwt"
-        };
-
-        return sensitiveKeys.Any(key =>
-            value.Contains(key, StringComparison.OrdinalIgnoreCase));
+        return AuditRedaction.RedactTextIfContainsSensitiveKey(value, 512);
     }
 
     private static string Truncate(string? value, int maxLen)
     {
         if (string.IsNullOrWhiteSpace(value))
+        {
             return string.Empty;
+        }
 
         value = value.Trim();
 

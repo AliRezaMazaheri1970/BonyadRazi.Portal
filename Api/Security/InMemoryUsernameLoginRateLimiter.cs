@@ -3,6 +3,19 @@ using System.Collections.Concurrent;
 
 namespace BonyadRazi.Portal.Api.Security;
 
+/// <summary>
+/// Process-local username login rate limiter.
+///
+/// SECURITY NOTE:
+/// This implementation is safe only for single-instance API deployments.
+/// Counters are stored in memory inside the current process. If the API is
+/// scaled out to multiple instances, each instance will maintain its own
+/// independent counters and the effective login attempt limit will increase
+/// roughly by the number of instances.
+///
+/// Before running more than one API instance, replace this implementation with
+/// a distributed implementation backed by Redis, SQL, or another shared store.
+/// </summary>
 public sealed class InMemoryUsernameLoginRateLimiter : IUsernameLoginRateLimiter
 {
     private readonly ConcurrentDictionary<string, Bucket> _buckets = new(StringComparer.OrdinalIgnoreCase);

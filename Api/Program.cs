@@ -272,14 +272,15 @@ app.UseMiddleware<SecurityDeniedAuditMiddleware>();
 
 app.UseAuthorization();
 
-// Public API health endpoint used by deployment smoke tests.
+// Protected API health endpoint.
+// Public infrastructure health checks must use /gateway/health instead.
 // Keep the response minimal: no configuration, secrets, database details, or machine internals.
 app.MapGet("/health", () => Results.Ok(new
 {
     status = "ok",
     where = "api",
     utc = DateTime.UtcNow
-})).AllowAnonymous();
+})).RequireAuthorization(PortalPolicies.SystemAdmin);
 
 app.MapControllers();
 
