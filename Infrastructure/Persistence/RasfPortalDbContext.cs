@@ -1,5 +1,4 @@
 using BonyadRazi.Portal.Infrastructure.Audit.Entities;
-using BonyadRazi.Portal.Infrastructure.Auth.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace BonyadRazi.Portal.Infrastructure.Persistence;

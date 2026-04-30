@@ -201,7 +201,7 @@ if (app.Environment.IsDevelopment())
         {
             var (hash, salt, it) = hasher.Hash("admin");
 
-            db.UserAccounts.Add(new BonyadRazi.Portal.Infrastructure.Auth.Entities.UserAccount
+            db.UserAccounts.Add(new BonyadRazi.Portal.Infrastructure.Audit.Entities.UserAccount
             {
                 Username = "admin",
                 PasswordHash = hash,
