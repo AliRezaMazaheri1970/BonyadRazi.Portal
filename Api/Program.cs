@@ -172,10 +172,7 @@ builder.Services.Configure<UsernameLoginRateLimitOptions>(
 
 builder.Services.AddSingleton<IUsernameLoginRateLimiter, InMemoryUsernameLoginRateLimiter>();
 
-if (builder.Environment.IsEnvironment("Testing"))
-    builder.Services.AddSingleton<IUserActionLogService, NoOpUserActionLogService>();
-else
-    builder.Services.AddScoped<IUserActionLogService, DbUserActionLogService>();
+builder.Services.AddScoped<IUserActionLogService, DbUserActionLogService>();
 
 builder.Services.AddSingleton<Pbkdf2PasswordHasher>();
 

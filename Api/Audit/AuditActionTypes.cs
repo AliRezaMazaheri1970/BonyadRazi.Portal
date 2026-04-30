@@ -42,6 +42,7 @@ public static class AuditActionTypes
     public const string SecurityIpBlocked = "Security.IpBlocked";
     public const string SecurityUnknownApiPathBlocked = "Security.UnknownApiPathBlocked";
     public const string SecurityLoginRateLimited = "Security.LoginRateLimited";
+    public const string SecurityDeniedLegacy = "SecurityDenied";
 
     // System
     public const string SystemHealthChecked = "System.HealthChecked";

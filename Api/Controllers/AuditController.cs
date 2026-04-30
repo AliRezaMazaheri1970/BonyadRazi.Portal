@@ -1,11 +1,12 @@
-﻿using BonyadRazi.Portal.Api.Security;
+﻿using BonyadRazi.Portal.Api.Audit;
+using BonyadRazi.Portal.Api.Security;
 using BonyadRazi.Portal.Infrastructure.Persistence;
 using BonyadRazi.Portal.Shared.Audit.Dtos;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
-namespace Api.Controllers;
+namespace BonyadRazi.Portal.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -32,24 +33,43 @@ public sealed class AuditController : ControllerBase
         [FromQuery] int pageSize = 50,
         CancellationToken ct = default)
     {
-        if (page < 1) page = 1;
-        if (pageSize < 1) pageSize = 50;
-        if (pageSize > 500) pageSize = 500;
+        if (page < 1)
+        {
+            page = 1;
+        }
+
+        if (pageSize < 1)
+        {
+            pageSize = 50;
+        }
+
+        if (pageSize > 500)
+        {
+            pageSize = 500;
+        }
 
         var q = _db.UserActionLogs.AsNoTracking()
-            .Where(x => x.ActionType == "SecurityDenied");
+            .Where(x => x.ActionType == AuditActionTypes.SecurityAccessDenied);
 
         if (fromUtc.HasValue)
+        {
             q = q.Where(x => x.Utc >= fromUtc.Value);
+        }
 
         if (toUtc.HasValue)
+        {
             q = q.Where(x => x.Utc <= toUtc.Value);
+        }
 
         if (statusCode.HasValue)
+        {
             q = q.Where(x => x.StatusCode == statusCode.Value);
+        }
 
         if (companyCode.HasValue)
+        {
             q = q.Where(x => x.CompanyCode == companyCode.Value);
+        }
 
         var total = await q.CountAsync(ct);
 

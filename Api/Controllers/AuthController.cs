@@ -1,4 +1,6 @@
-﻿using BonyadRazi.Portal.Api.Security;
+﻿using BonyadRazi.Portal.Api.Audit;
+using BonyadRazi.Portal.Api.Security;
+using BonyadRazi.Portal.Application.Abstractions;
 using BonyadRazi.Portal.Infrastructure.Audit.Entities;
 using BonyadRazi.Portal.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -20,6 +22,7 @@ public sealed class AuthController : ControllerBase
     private readonly IConfiguration _cfg;
     private readonly Pbkdf2PasswordHasher _hasher;
     private readonly IUsernameLoginRateLimiter _usernameLoginRateLimiter;
+    private readonly IUserActionLogService _userActionLogService;
 
     // Lockout policy (Dev)
     private const int MaxFailedAttempts = 5;
@@ -29,12 +32,14 @@ public sealed class AuthController : ControllerBase
         RasfPortalDbContext db,
         IConfiguration cfg,
         Pbkdf2PasswordHasher hasher,
-        IUsernameLoginRateLimiter usernameLoginRateLimiter)
+        IUsernameLoginRateLimiter usernameLoginRateLimiter,
+        IUserActionLogService userActionLogService)
     {
         _db = db;
         _cfg = cfg;
         _hasher = hasher;
         _usernameLoginRateLimiter = usernameLoginRateLimiter;
+        _userActionLogService = userActionLogService;
     }
 
     public sealed record LoginRequest(string Username, string Password);
@@ -63,6 +68,30 @@ public sealed class AuthController : ControllerBase
         if (!usernameLimit.Allowed)
         {
             Response.Headers.RetryAfter = usernameLimit.RetryAfterSeconds.ToString();
+
+            await _userActionLogService.LogAsync(
+                userId: null,
+                actionType: AuditActionTypes.SecurityLoginRateLimited,
+                metadata: new
+                {
+                    utc = now,
+                    statusCode = StatusCodes.Status429TooManyRequests,
+                    reason = "LOGIN_RATE_LIMITED_BY_USERNAME",
+
+                    method = Request.Method,
+                    path = Request.Path.ToString(),
+                    queryString = string.Empty,
+
+                    traceId = HttpContext.TraceIdentifier,
+
+                    remoteIp = ResolveClientIp(HttpContext),
+                    userAgent = Truncate(Request.Headers.UserAgent.ToString(), 512),
+
+                    username,
+                    rateLimitBucket = "username",
+                    retryAfterSeconds = usernameLimit.RetryAfterSeconds
+                },
+                cancellationToken: HttpContext.RequestAborted);
 
             return StatusCode(StatusCodes.Status429TooManyRequests, new
             {
@@ -259,9 +288,6 @@ public sealed class AuthController : ControllerBase
         return await _db.SaveChangesAsync(ct);
     }
 
-    private static bool IsRefreshActive(RefreshToken t, DateTime utcNow)
-        => t.RevokedUtc is null && utcNow < t.ExpiresUtc;
-
     private static string GenerateRefreshTokenRaw()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);
@@ -319,5 +345,37 @@ public sealed class AuthController : ControllerBase
         );
 
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private static string ResolveClientIp(HttpContext context)
+    {
+        try
+        {
+            var ip = context.Connection.RemoteIpAddress;
+
+            if (ip is null)
+                return "unknown";
+
+            if (ip.IsIPv4MappedToIPv6)
+                ip = ip.MapToIPv4();
+
+            return ip.ToString();
+        }
+        catch
+        {
+            return "unknown";
+        }
+    }
+
+    private static string Truncate(string? value, int maxLen)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        value = value.Trim();
+
+        return value.Length <= maxLen
+            ? value
+            : value[..maxLen];
     }
 }

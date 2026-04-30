@@ -2,6 +2,7 @@ using System.Security.Claims;
 using BonyadRazi.Portal.Application.Abstractions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using BonyadRazi.Portal.Api.Audit;
 
 namespace BonyadRazi.Portal.Api.Middleware;
 
@@ -73,7 +74,7 @@ public sealed class SecurityDeniedAuditMiddleware
         {
             await userActionLogService.LogAsync(
                 actorUserId,
-                "SecurityDenied",
+                AuditActionTypes.SecurityAccessDenied,
                 metadata,
                 context.RequestAborted);
         }
@@ -84,7 +85,7 @@ public sealed class SecurityDeniedAuditMiddleware
         catch (Exception ex)
         {
             // Audit must be fail-safe.
-            _logger.LogError(ex, "Failed to write SecurityDenied audit log.");
+            _logger.LogError(ex, "Failed to write security access denied audit log.");
         }
     }
 
